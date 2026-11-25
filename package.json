@@ -1,0 +1,14 @@
+{
+  "name": "gemini-tampermonkey",
+  "version": "0.1.0",
+  "description": "Tampermonkey userscript adding missing keyboard shortcuts to gemini.google.com",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:firefox": "node scripts/test-firefox.mjs",
+    "check": "npm run build && npm test",
+    "dev": "node scripts/dev-server.mjs"
+  }
+}

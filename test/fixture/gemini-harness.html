@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gemini Shortcuts Verification Harness</title>
+  <style>
+    :root,
+    .theme-host {
+      --gem-sys-color--surface: #ffffff;
+      --gem-sys-color--on-surface: #1f1f1f;
+      --gem-sys-color--on-surface-variant: #444746;
+      --gem-sys-color--outline-low: #e1e3e1;
+      --gem-sys-color--primary: #0b57d0;
+      --lumi-sys-color--surface-bright: #f0f4f9;
+      --gem-sys-shape--corner-full: 9999px;
+      --lumi-sys-elevation--level2: 0 0 20px 0 rgba(0, 0, 0, 0.11);
+    }
+
+    .theme-host.dark-theme {
+      --gem-sys-color--surface: #131314;
+      --gem-sys-color--on-surface: #e3e3e3;
+      --gem-sys-color--on-surface-variant: #c4c7c5;
+      --gem-sys-color--outline-low: #444746;
+      --gem-sys-color--primary: #8ab4f8;
+      --lumi-sys-color--surface-bright: #282a2c;
+      --lumi-sys-elevation--level2: 0 0 20px 0 rgba(0, 0, 0, 0.4);
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: var(--gem-sys-color--surface);
+      color: var(--gem-sys-color--on-surface);
+      font-family: "Google Sans", Roboto, Arial, sans-serif;
+    }
+
+    .hud {
+      position: fixed;
+      top: 8px;
+      right: 12px;
+      z-index: 2000;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 6px 12px;
+      border-radius: 8px;
+      background: rgba(32, 33, 36, 0.92);
+      color: #e8eaed;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      border: 1px solid #5f6368;
+    }
+    .hud button {
+      background: #3c4043;
+      color: #fff;
+      border: 1px solid #5f6368;
+      border-radius: 6px;
+      padding: 3px 8px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    chat-app {
+      display: flex;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    chat-window {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      height: 100%;
+      overflow: hidden;
+      padding-top: 48px;
+    }
+
+    .chat-history-scroll-container.lm {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+      height: 100%;
+      max-height: 100%;
+    }
+
+    infinite-scroller.chat-history {
+      display: block;
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 0 48px;
+    }
+
+    .conversation-container {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    user-query {
+      display: flex;
+      justify-content: flex-end;
+      margin: 24px 0 16px;
+    }
+
+    .user-query-bubble-with-background {
+      display: inline-block;
+      padding: 12px 18px;
+      border-radius: 20px 4px 20px 20px;
+      background: var(--lumi-sys-color--surface-bright);
+      color: var(--gem-sys-color--on-surface);
+      font-size: 15px;
+    }
+
+    model-response {
+      display: block;
+      margin-bottom: 32px;
+      line-height: 1.65;
+      font-size: 15px;
+    }
+
+    model-response p {
+      margin: 0 0 12px;
+    }
+
+    input-container {
+      display: flex;
+      justify-content: center;
+      padding: 12px 24px 24px;
+      background: var(--gem-sys-color--surface);
+    }
+
+    .input-area-container {
+      width: 100%;
+      max-width: 720px;
+    }
+
+    input-area-v2 {
+      display: block;
+      width: 100%;
+    }
+
+    fieldset.input-area-fieldset {
+      border: 1px solid var(--gem-sys-color--outline-low);
+      border-radius: 28px;
+      margin: 0;
+      padding: 10px 14px;
+      background: var(--lumi-sys-color--surface-bright);
+    }
+
+    .text-input-field {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .leading-actions-wrapper button,
+    .trailing-actions-wrapper button {
+      height: 36px;
+      min-width: 36px;
+      border-radius: 9999px;
+      border: 1px solid var(--gem-sys-color--outline-low);
+      background: transparent;
+      color: var(--gem-sys-color--on-surface);
+      cursor: pointer;
+      padding: 0 12px;
+      font-size: 14px;
+    }
+
+    .leading-actions-wrapper button:focus-visible,
+    .trailing-actions-wrapper button:focus-visible {
+      outline: 2px solid var(--gem-sys-color--primary);
+      outline-offset: 2px;
+    }
+
+    .ql-editor {
+      min-height: 28px;
+      outline: none;
+      font-size: 15px;
+      line-height: 28px;
+      color: var(--gem-sys-color--on-surface);
+    }
+
+    .ql-editor:empty::before {
+      content: attr(data-placeholder);
+      color: var(--gem-sys-color--on-surface-variant);
+    }
+  </style>
+</head>
+<body class="theme-host dark-theme">
+  <div class="hud" id="hud">
+    <span>active: <strong id="hud-active">none</strong></span>
+    <span>scrollTop: <strong id="hud-scroll">0</strong>/<span id="hud-max">0</span></span>
+    <span>skipOpacity: <strong id="hud-opacity">n/a</strong></span>
+    <span>lastKey: <strong id="hud-key">none</strong></span>
+    <button type="button" id="toggle-theme" tabindex="-1">Toggle Theme</button>
+  </div>
+
+  <chat-app>
+    <chat-window>
+      <div class="chat-history-scroll-container lm">
+        <infinite-scroller class="chat-history" data-test-id="chat-history-container">
+          <div class="conversation-container" id="conversation">
+            <user-query id="prompt-1">
+              <span class="user-query-bubble-with-background">Prompt 1: Explain orbital mechanics briefly</span>
+            </user-query>
+            <model-response>
+              <p>Orbital mechanics describes the motion of spacecraft and celestial bodies under gravity.</p>
+              <p>Kepler's first law states that every planet's orbit is an ellipse with the Sun at one focus.</p>
+              <p>Kepler's second law states that a line segment joining a planet and the Sun sweeps out equal areas during equal intervals of time.</p>
+              <p>Kepler's third law relates the square of the orbital period to the cube of the semi-major axis.</p>
+              <p>Hohmann transfer orbits provide a fuel-efficient two-impulse maneuver between two coplanar circular orbits.</p>
+              <p>Escape velocity depends on the mass of the central body and the radial distance from its center.</p>
+              <p>Specific orbital energy remains constant along an unperturbed Keplerian trajectory.</p>
+              <p>Lagrange points are five positions where gravitational and centripetal forces balance in a two-body system.</p>
+            </model-response>
+
+            <user-query id="prompt-2">
+              <span class="user-query-bubble-with-background">Prompt 2: Write a long poem about deep space</span>
+            </user-query>
+            <model-response id="poem-response"></model-response>
+          </div>
+        </infinite-scroller>
+      </div>
+
+      <input-container class="input-gradient-overlay">
+        <div class="input-area-container">
+          <input-area-v2>
+            <fieldset class="input-area-fieldset" role="none">
+              <div class="text-input-field simplified-input-area">
+                <div class="leading-actions-wrapper">
+                  <button type="button" aria-label="Upload &amp; tools">+</button>
+                </div>
+                <div class="text-input-field-main-area">
+                  <rich-textarea>
+                    <div
+                      class="ql-editor textarea new-input-ui"
+                      contenteditable="true"
+                      role="textbox"
+                      aria-multiline="true"
+                      aria-label="Enter a prompt for Gemini"
+                      data-placeholder="Ask Gemini"
+                    ></div>
+                  </rich-textarea>
+                </div>
+                <div class="trailing-actions-wrapper">
+                  <button type="button" data-test-id="bard-mode-menu-button">Auto</button>
+                  <button type="button" aria-label="Send message">Send</button>
+                </div>
+              </div>
+            </fieldset>
+          </input-area-v2>
+        </div>
+      </input-container>
+    </chat-window>
+  </chat-app>
+
+  <script>
+    // Populate a long multi-stanza response so the scroller reliably overflows
+    const poem = document.getElementById('poem-response');
+    for (let i = 1; i <= 32; i += 1) {
+      const p = document.createElement('p');
+      p.textContent = `Line ${i}: Across the velvet dark where ancient starlight bends and distant nebulae unfold in quiet cosmic grace.`;
+      poem.appendChild(p);
+    }
+
+    // Tampermonkey-compatible GM_addStyle shim
+    window.GM_addStyle = function (css) {
+      const style = document.createElement('style');
+      style.setAttribute('data-gm-added', 'true');
+      style.textContent = css;
+      document.head.appendChild(style);
+      return style;
+    };
+
+    // Start scrolled to the bottom, matching Gemini after a response finishes
+    const scroller = document.querySelector('infinite-scroller[data-test-id="chat-history-container"]');
+    scroller.scrollTop = scroller.scrollHeight;
+
+    // Live telemetry HUD updater
+    const hudActive = document.getElementById('hud-active');
+    const hudScroll = document.getElementById('hud-scroll');
+    const hudMax = document.getElementById('hud-max');
+    const hudOpacity = document.getElementById('hud-opacity');
+    const hudKey = document.getElementById('hud-key');
+
+    function describeElement(el) {
+      if (!el || el === document.body) return 'body';
+      if (el.getAttribute('data-gtm-feature')) return `skip-btn(${el.getAttribute('aria-label')})`;
+      if (el.classList.contains('ql-editor')) return 'ql-editor';
+      if (el.getAttribute('aria-label')) return `btn(${el.getAttribute('aria-label')})`;
+      return el.tagName.toLowerCase();
+    }
+
+    function updateHud() {
+      hudActive.textContent = describeElement(document.activeElement);
+      hudScroll.textContent = String(Math.round(scroller.scrollTop));
+      hudMax.textContent = String(Math.round(scroller.scrollHeight - scroller.clientHeight));
+      const skipBtn = document.querySelector('button[data-gtm-feature="skip-to-previous-prompt"]');
+      hudOpacity.textContent = skipBtn ? getComputedStyle(skipBtn).opacity : 'missing';
+    }
+
+    document.addEventListener('keydown', (e) => {
+      hudKey.textContent = `${e.shiftKey ? 'Shift+' : ''}${e.key}`;
+      setTimeout(updateHud, 20);
+    }, true);
+    document.addEventListener('focusin', () => setTimeout(updateHud, 10));
+    scroller.addEventListener('scroll', updateHud);
+    setInterval(updateHud, 150);
+
+    document.getElementById('toggle-theme').addEventListener('click', () => {
+      document.body.classList.toggle('dark-theme');
+      document.body.classList.toggle('light-theme');
+    });
+  </script>
+
+  <!-- Load the exact built Tampermonkey userscript -->
+  <script src="/dist/gemini-shortcuts.user.js"></script>
+</body>
+</html>
