@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { USERSCRIPT_HEADER } from '../src/meta.js';
+import { createUserscriptHeader } from '../src/meta.js';
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '..');
 const DIST_DIR = path.join(ROOT_DIR, 'dist');
+const PKG_PATH = path.join(ROOT_DIR, 'package.json');
 const OUTPUT_FILE = path.join(DIST_DIR, 'gemini-shortcuts.user.js');
+const META_OUTPUT_FILE = path.join(DIST_DIR, 'gemini-shortcuts.meta.js');
 
 const SOURCE_FILES = [
   'src/lib/scrolling.js',
@@ -24,6 +26,9 @@ function stripModuleSyntax(code) {
 }
 
 function build() {
+  const pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf8'));
+  const header = createUserscriptHeader({ version: pkg.version });
+
   const sections = SOURCE_FILES.map((relPath) => {
     const absPath = path.join(ROOT_DIR, relPath);
     const raw = fs.readFileSync(absPath, 'utf8');
@@ -34,7 +39,7 @@ function build() {
       .join('\n')}`;
   });
 
-  const bundle = `${USERSCRIPT_HEADER}
+  const bundle = `${header}
 
 (function () {
   'use strict';
@@ -42,10 +47,13 @@ function build() {
 ${sections.join('\n\n')}
 })();
 `;
+  const meta = `${header}\n`;
 
   fs.mkdirSync(DIST_DIR, { recursive: true });
   fs.writeFileSync(OUTPUT_FILE, bundle, 'utf8');
+  fs.writeFileSync(META_OUTPUT_FILE, meta, 'utf8');
   console.log(`Built ${path.relative(ROOT_DIR, OUTPUT_FILE)} (${bundle.length} bytes)`);
+  console.log(`Built ${path.relative(ROOT_DIR, META_OUTPUT_FILE)} (${meta.length} bytes)`);
 }
 
 build();

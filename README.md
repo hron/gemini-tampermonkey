@@ -46,12 +46,18 @@ npm run dev
 
 ## Installing in Tampermonkey
 
-### Option 1: Direct copy/paste (Firefox, Brave, Chrome)
+### Option 1: 1-Click Install from GitHub Releases (Recommended)
+1. Install [Tampermonkey](https://www.tampermonkey.net/) in your browser.
+2. Open the latest release userscript:
+   **[Install Gemini Keyboard Shortcuts](https://github.com/hron/gemini-tampermonkey/releases/latest/download/gemini-shortcuts.user.js)**
+3. Click **Install** in the Tampermonkey prompt. Future releases update automatically via `@updateURL` / `@downloadURL`.
+
+### Option 2: Direct copy/paste (Firefox, Brave, Chrome)
 1. Run `npm run build`.
 2. Open Tampermonkey Dashboard → **Create a new script**.
 3. Paste the contents of `dist/gemini-shortcuts.user.js` and save.
 
-### Option 2: Live local development via `@require`
+### Option 3: Live local development via `@require`
 > **Note for Firefox users:** Firefox blocks WebExtensions (including Tampermonkey) from loading `file://` URLs. Use the local HTTP dev server (`npm run dev`) instead of `file://` in Firefox!
 
 - **Firefox & Chromium (works everywhere):**
@@ -72,15 +78,24 @@ npm run dev
 
 - **Brave / Chrome only (`file://`):**
   1. Enable **Allow access to file URLs** in Tampermonkey's extension settings.
-  2. Use `@require file:///home/algus/src/gemini-tampermonkey/dist/gemini-shortcuts.user.js`.
+  2. Use `@require file:///path/to/gemini-tampermonkey/dist/gemini-shortcuts.user.js`.
   3. Run `npm run build` after changes and reload `gemini.google.com`.
+
+## Releasing
+
+Releases are built, verified (unit + Firefox E2E tests), and published automatically by GitHub Actions when a `v*.*.*` tag is pushed:
+
+```bash
+npm version patch   # or minor / major (updates package.json and creates a vX.Y.Z tag)
+git push origin main --follow-tags
+```
 
 ## Project Structure
 
-- `src/meta.js` — Tampermonkey metadata header.
+- `src/meta.js` — Tampermonkey metadata header generator (reads version from `package.json`).
 - `src/lib/dom.js` — Gemini DOM selectors and helpers.
 - `src/lib/scrolling.js` — Pure scrolling & prompt-jump calculations.
 - `src/features/` — Individual shortcut features (add new features here).
 - `src/main.js` — Feature bootstrapper.
-- `scripts/build.mjs` — Zero-dependency bundler generating `dist/gemini-shortcuts.user.js`.
+- `scripts/build.mjs` — Zero-dependency bundler generating `dist/gemini-shortcuts.user.js` and `dist/gemini-shortcuts.meta.js`.
 - `test/` — Unit tests (`node --test`).
