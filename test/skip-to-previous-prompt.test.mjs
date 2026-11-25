@@ -235,6 +235,21 @@ describe('skip-to-previous-prompt feature', () => {
     feature.destroy();
   });
 
+  it('uses a zero-specificity fallback rule for anchor positioning without !important', () => {
+    const env = createFakeGeminiEnv();
+    const feature = createSkipToPreviousPromptFeature({ doc: env.doc, observe: false });
+    feature.init();
+
+    const styleEl = env.doc.head.children.find(
+      (c) => c.tagName === 'STYLE' && c.getAttribute('data-gtm-style-id') === 'skip-to-previous-prompt',
+    );
+    assert.ok(styleEl, 'expected injected stylesheet');
+    assert.match(styleEl.textContent, /:where\(\.gtm-skip-anchor\)\s*\{\s*position:\s*relative;\s*\}/);
+    assert.doesNotMatch(styleEl.textContent, /position:\s*relative\s*!important/);
+
+    feature.destroy();
+  });
+
   it('moves focus from input field to Skip button on Shift+Tab, and back on Tab / Escape', () => {
     const env = createFakeGeminiEnv();
     const feature = createSkipToPreviousPromptFeature({ doc: env.doc, observe: false });
