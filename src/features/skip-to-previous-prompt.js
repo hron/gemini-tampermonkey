@@ -11,6 +11,7 @@ import {
 import {
   applyScrollAction,
   computeScrollAction,
+  createSmoothArrowScroller,
   findPreviousPromptScrollTop,
 } from '../lib/scrolling.js';
 
@@ -128,7 +129,27 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
   let buttonEl = null;
   let observer = null;
   let syncScheduled = false;
-  const keyTarget = doc.defaultView || doc;
+  const view = doc.defaultView || null;
+  const keyTarget = view || doc;
+
+  const arrowScroller = createSmoothArrowScroller({
+    getScroller: () => findChatScroller(doc),
+    requestFrame:
+      view && typeof view.requestAnimationFrame === 'function'
+        ? (cb) => view.requestAnimationFrame(cb)
+        : null,
+    cancelFrame:
+      view && typeof view.cancelAnimationFrame === 'function'
+        ? (id) => view.cancelAnimationFrame(id)
+        : null,
+    prefersReducedMotion: () => {
+      try {
+        return Boolean(view?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+      } catch {
+        return false;
+      }
+    },
+  });
 
   function focusElement(el) {
     if (!el || typeof el.focus !== 'function') return false;
@@ -154,16 +175,31 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
   }
 
   function handleButtonBlur() {
+    arrowScroller.stop();
     setButtonFocused(false);
+  }
+
+  function handleWindowBlur() {
+    arrowScroller.stop();
+  }
+
+  function handleDocumentKeyUp(event) {
+    if (event.key === 'ArrowUp') {
+      arrowScroller.release(-1);
+    } else if (event.key === 'ArrowDown') {
+      arrowScroller.release(1);
+    }
   }
 
   function handleDocumentFocusIn(event) {
     if (buttonEl && event.target !== buttonEl) {
+      arrowScroller.stop();
       setButtonFocused(false);
     }
   }
 
   function skipToPreviousPrompt() {
+    arrowScroller.stop();
     const scroller = findChatScroller(doc);
     if (!scroller) return false;
 
@@ -180,6 +216,7 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
 
   function handleButtonKeyDown(event) {
     if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      arrowScroller.stop();
       if (!event.shiftKey) {
         const input = findPromptInput(doc);
         if (input) {
@@ -202,6 +239,7 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
     }
 
     if (event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      arrowScroller.stop();
       const input = findPromptInput(doc);
       if (input) {
         event.preventDefault();
@@ -224,9 +262,25 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
       return;
     }
 
+    if (
+      (event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey
+    ) {
+      const direction = event.key === 'ArrowUp' ? -1 : 1;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat || !arrowScroller.isActive()) {
+        arrowScroller.press(direction);
+      }
+      return;
+    }
+
     const scroller = findChatScroller(doc);
     const action = computeScrollAction(event, scroller);
     if (action) {
+      arrowScroller.stop();
       event.preventDefault();
       event.stopPropagation();
       applyScrollAction(scroller, action);
@@ -318,6 +372,8 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
   function init() {
     injectStyles(SKIP_BUTTON_STYLES, SKIP_FEATURE_ID, doc);
     keyTarget.addEventListener('keydown', handleDocumentKeyDown, true);
+    keyTarget.addEventListener('keyup', handleDocumentKeyUp, true);
+    keyTarget.addEventListener('blur', handleWindowBlur);
     doc.addEventListener('focusin', handleDocumentFocusIn, true);
     sync();
 
@@ -333,7 +389,10 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
   }
 
   function destroy() {
+    arrowScroller.stop();
     keyTarget.removeEventListener('keydown', handleDocumentKeyDown, true);
+    keyTarget.removeEventListener('keyup', handleDocumentKeyUp, true);
+    keyTarget.removeEventListener('blur', handleWindowBlur);
     doc.removeEventListener('focusin', handleDocumentFocusIn, true);
     if (observer) {
       observer.disconnect();

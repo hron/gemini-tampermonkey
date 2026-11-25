@@ -304,7 +304,9 @@ describe('skip-to-previous-prompt feature', () => {
     assert.equal(env.scroller.scrollCalls.length, 6);
     assert.equal(env.scroller.scrollCalls[0].method, 'scrollBy');
     assert.ok(env.scroller.scrollCalls[0].top < 0, 'ArrowUp scrolls up');
+    assert.equal(env.scroller.scrollCalls[0].behavior, 'smooth', 'ArrowUp scrolls smoothly');
     assert.ok(env.scroller.scrollCalls[1].top > 0, 'ArrowDown scrolls down');
+    assert.equal(env.scroller.scrollCalls[1].behavior, 'smooth', 'ArrowDown scrolls smoothly');
     assert.ok(env.scroller.scrollCalls[2].top < -100, 'PageUp scrolls up by page');
     assert.ok(env.scroller.scrollCalls[3].top > 100, 'PageDown scrolls down by page');
     assert.deepEqual(env.scroller.scrollCalls[4], { method: 'scrollTo', top: 0, behavior: 'smooth' });
@@ -391,6 +393,83 @@ describe('skip-to-previous-prompt feature', () => {
 
     assert.equal(ev.defaultPrevented, true);
     assert.equal(env.doc.activeElement, env.doc.querySelector(SKIP_BUTTON_SELECTOR));
+
+    feature.destroy();
+  });
+
+  it('uses continuous requestAnimationFrame scrolling while ArrowDown is held and stops on keyup or blur', () => {
+    const env = createFakeGeminiEnv({ initialScrollTop: 1000 });
+    const winListeners = new Map();
+    let nowMs = 0;
+    let nextId = 1;
+    const frames = new Map();
+
+    env.doc.defaultView = {
+      addEventListener(type, fn, options) {
+        if (!winListeners.has(type)) winListeners.set(type, []);
+        winListeners.get(type).push({ fn, capture: Boolean(options?.capture ?? options) });
+      },
+      removeEventListener(type, fn) {
+        if (!winListeners.has(type)) return;
+        winListeners.set(type, winListeners.get(type).filter((e) => e.fn !== fn));
+      },
+      dispatchEvent(event) {
+        const list = winListeners.get(event.type) ?? [];
+        for (const { fn } of list) fn(event);
+      },
+      requestAnimationFrame(cb) {
+        const id = nextId++;
+        frames.set(id, cb);
+        return id;
+      },
+      cancelAnimationFrame(id) {
+        frames.delete(id);
+      },
+    };
+
+    const advanceMs = (totalMs) => {
+      const steps = Math.round(totalMs / 16.6667);
+      for (let i = 0; i < steps; i += 1) {
+        if (frames.size === 0) break;
+        nowMs += 16.6667;
+        const pending = Array.from(frames.entries());
+        frames.clear();
+        for (const [, cb] of pending) cb(nowMs);
+      }
+    };
+
+    const feature = createSkipToPreviousPromptFeature({ doc: env.doc, observe: false });
+    feature.init();
+
+    const btn = env.doc.querySelector(SKIP_BUTTON_SELECTOR);
+    env.doc.activeElement = btn;
+
+    // Initial keydown starts continuous motion
+    const down1 = createFakeEvent('keydown', { key: 'ArrowDown', repeat: false, target: btn });
+    btn.dispatchEvent(down1);
+    assert.equal(down1.defaultPrevented, true);
+
+    advanceMs(250);
+    const posAfter250 = env.scroller.scrollTop;
+    assert.ok(posAfter250 > 1100, `expected smooth continuous scroll, got ${posAfter250}`);
+
+    // Repeat keydowns are prevented without triggering extra discrete scrollBy calls
+    const repeatEv = createFakeEvent('keydown', { key: 'ArrowDown', repeat: true, target: btn });
+    btn.dispatchEvent(repeatEv);
+    assert.equal(repeatEv.defaultPrevented, true);
+    assert.equal(env.scroller.scrollCalls.filter((c) => c.method === 'scrollBy').length, 0);
+
+    // Keyup on window releases hold and coasts to a stop
+    env.doc.defaultView.dispatchEvent(createFakeEvent('keyup', { key: 'ArrowDown' }));
+    advanceMs(600);
+    assert.equal(frames.size, 0);
+
+    // Pressing PageUp cancels any in-flight arrow motion cleanly
+    btn.dispatchEvent(createFakeEvent('keydown', { key: 'ArrowUp', repeat: false, target: btn }));
+    advanceMs(50);
+    assert.ok(frames.size > 0);
+    btn.dispatchEvent(createFakeEvent('keydown', { key: 'PageUp', repeat: false, target: btn }));
+    assert.equal(frames.size, 0);
 
     feature.destroy();
   });

@@ -221,19 +221,53 @@ async function verifyScenario(context, url, label) {
   assert.equal(afterShiftTab.btnOpacity, '1', `${label}: button visible when focused`);
   assert.equal(afterShiftTab.btnPointerEvents, 'auto', `${label}: pointer-events enabled when focused`);
 
-  // ArrowUp / ArrowDown
-  await press('\uE013');
+  // ArrowUp / ArrowDown taps
+  await press('\uE013', false, 300);
   const afterUp = await getState();
-  assert.ok(afterUp.scrollTop < afterShiftTab.scrollTop, `${label}: ArrowUp scrolls up`);
+  assert.ok(afterUp.scrollTop < afterShiftTab.scrollTop - 30, `${label}: ArrowUp tap scrolls up smoothly`);
 
-  await press('\uE015');
+  await press('\uE015', false, 300);
   const afterDown = await getState();
-  assert.ok(afterDown.scrollTop > afterUp.scrollTop, `${label}: ArrowDown scrolls down`);
+  assert.ok(afterDown.scrollTop > afterUp.scrollTop + 30, `${label}: ArrowDown tap scrolls down smoothly`);
+
+  // Holding ArrowUp scrolls continuously beyond a single step and coasts to rest
+  await send('input.performActions', {
+    context,
+    actions: [{ type: 'key', id: 'kbd', actions: [{ type: 'keyDown', value: '\uE013' }] }],
+  });
+  await new Promise((r) => setTimeout(r, 450));
+  await send('input.performActions', {
+    context,
+    actions: [{ type: 'key', id: 'kbd', actions: [{ type: 'keyUp', value: '\uE013' }] }],
+  });
+  await new Promise((r) => setTimeout(r, 300));
+  const afterHoldUp = await getState();
+  assert.ok(
+    afterHoldUp.scrollTop < afterDown.scrollTop - 180,
+    `${label}: holding ArrowUp scrolls continuously (moved ${afterDown.scrollTop - afterHoldUp.scrollTop}px)`,
+  );
+
+  // Hold ArrowDown back down to restore room for PageUp check
+  await send('input.performActions', {
+    context,
+    actions: [{ type: 'key', id: 'kbd', actions: [{ type: 'keyDown', value: '\uE015' }] }],
+  });
+  await new Promise((r) => setTimeout(r, 450));
+  await send('input.performActions', {
+    context,
+    actions: [{ type: 'key', id: 'kbd', actions: [{ type: 'keyUp', value: '\uE015' }] }],
+  });
+  await new Promise((r) => setTimeout(r, 300));
+  const afterHoldDown = await getState();
+  assert.ok(
+    afterHoldDown.scrollTop > afterHoldUp.scrollTop + 180,
+    `${label}: holding ArrowDown scrolls continuously (moved ${afterHoldDown.scrollTop - afterHoldUp.scrollTop}px)`,
+  );
 
   // PageUp / PageDown
   await press('\uE00E', false, 450);
   const afterPageUp = await getState();
-  assert.ok(afterPageUp.scrollTop < afterDown.scrollTop - 150, `${label}: PageUp scrolls up a page`);
+  assert.ok(afterPageUp.scrollTop < afterHoldDown.scrollTop - 150, `${label}: PageUp scrolls up a page`);
 
   await press('\uE00F', false, 450);
   const afterPageDown = await getState();

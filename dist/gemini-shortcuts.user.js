@@ -6,6 +6,7 @@
 // @author       You
 // @match        https://gemini.google.com/*
 // @grant        GM_addStyle
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=gemini.google.com
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -14,10 +15,19 @@
 
   // --- src/lib/scrolling.js ---
   const ARROW_SCROLL_STEP_PX = 60;
+  const ARROW_HOLD_SPEED_PX_PER_SEC = 750;
+  const ARROW_HOLD_DELAY_SEC = 0.08;
+  const ARROW_SPRING_OMEGA = 20;
   const PAGE_SCROLL_RATIO = 0.85;
   const MIN_PAGE_SCROLL_PX = 100;
   const PROMPT_SCROLL_PADDING_PX = 16;
   const PROMPT_SCROLL_TOLERANCE_PX = 12;
+
+  const MAX_FRAME_DT_SEC = 0.05;
+  const DEFAULT_FIRST_FRAME_DT_SEC = 1 / 60;
+  const SETTLE_POSITION_EPSILON_PX = 0.5;
+  const SETTLE_VELOCITY_EPSILON_PX_PER_SEC = 5;
+  const EXTERNAL_SCROLL_TOLERANCE_PX = 2;
 
   /**
    * Translates a keyboard event on the skip control into a scroll action
@@ -35,9 +45,9 @@
 
     switch (event.key) {
       case 'ArrowUp':
-        return { type: 'by', delta: -ARROW_SCROLL_STEP_PX, behavior: 'instant' };
+        return { type: 'by', delta: -ARROW_SCROLL_STEP_PX, behavior: 'smooth' };
       case 'ArrowDown':
-        return { type: 'by', delta: ARROW_SCROLL_STEP_PX, behavior: 'instant' };
+        return { type: 'by', delta: ARROW_SCROLL_STEP_PX, behavior: 'smooth' };
       case 'PageUp':
         return { type: 'by', delta: -pageStep, behavior: pageBehavior };
       case 'PageDown':
@@ -121,6 +131,214 @@
     }
 
     return Math.max(0, Math.round(promptOffsets[0] - paddingPx));
+  }
+
+  function setScrollTopInstant(scroller, top) {
+    if (typeof scroller.scrollTo === 'function') {
+      try {
+        scroller.scrollTo(toScrollOptions(scroller, { top, behavior: 'instant' }));
+        return;
+      } catch {
+        // Fallback when Firefox XrayWrapper rejects options dictionary
+      }
+    }
+    scroller.scrollTop = top;
+  }
+
+  function getMaxScrollTop(scroller) {
+    if (!scroller) return 0;
+    const scrollHeight = scroller.scrollHeight || 0;
+    const clientHeight = scroller.clientHeight || 0;
+    return Math.max(0, scrollHeight - clientHeight);
+  }
+
+  function clampScrollTop(value, maxScroll) {
+    return Math.max(0, Math.min(maxScroll, value));
+  }
+
+  /**
+   * Drives continuous, frame-rate-independent smooth arrow scrolling via
+   * requestAnimationFrame using a critically damped spring:
+   * - Short taps smoothly glide by ARROW_SCROLL_STEP_PX without overshoot.
+   * - Rapid taps accumulate seamlessly.
+   * - Holding an arrow key transitions into continuous glide and coasts smoothly on release.
+   */
+  function createSmoothArrowScroller({
+    getScroller,
+    requestFrame = null,
+    cancelFrame = null,
+    prefersReducedMotion = null,
+  } = {}) {
+    const heldDirections = [];
+    let activeScroller = null;
+    let position = 0;
+    let target = 0;
+    let velocity = 0;
+    let holdElapsed = 0;
+    let lastAppliedScrollTop = null;
+    let lastTimestamp = null;
+    let rafId = null;
+
+    function stop() {
+      heldDirections.length = 0;
+      holdElapsed = 0;
+      velocity = 0;
+      lastTimestamp = null;
+      lastAppliedScrollTop = null;
+      activeScroller = null;
+      if (rafId !== null) {
+        if (typeof cancelFrame === 'function') {
+          cancelFrame(rafId);
+        }
+        rafId = null;
+      }
+    }
+
+    function tick(timestamp) {
+      rafId = null;
+
+      const scroller = activeScroller || (typeof getScroller === 'function' ? getScroller() : null);
+      if (!scroller) {
+        stop();
+        return;
+      }
+
+      const maxScroll = getMaxScrollTop(scroller);
+      const currentDomScrollTop = scroller.scrollTop || 0;
+      const heldDir = heldDirections.length > 0 ? heldDirections[heldDirections.length - 1] : 0;
+
+      if (
+        lastAppliedScrollTop !== null &&
+        Math.abs(currentDomScrollTop - lastAppliedScrollTop) > EXTERNAL_SCROLL_TOLERANCE_PX
+      ) {
+        if (heldDir === 0) {
+          stop();
+          return;
+        }
+        position = currentDomScrollTop;
+        target = clampScrollTop(position + heldDir * ARROW_SCROLL_STEP_PX, maxScroll);
+        velocity = 0;
+      }
+
+      const dt =
+        lastTimestamp === null
+          ? DEFAULT_FIRST_FRAME_DT_SEC
+          : Math.min(Math.max((timestamp - lastTimestamp) / 1000, 0), MAX_FRAME_DT_SEC);
+      lastTimestamp = timestamp;
+
+      if (heldDir !== 0) {
+        holdElapsed += dt;
+        if (holdElapsed > ARROW_HOLD_DELAY_SEC) {
+          target = clampScrollTop(target + heldDir * ARROW_HOLD_SPEED_PX_PER_SEC * dt, maxScroll);
+        } else {
+          target = clampScrollTop(target, maxScroll);
+        }
+      } else {
+        target = clampScrollTop(target, maxScroll);
+      }
+
+      // Exact analytical step for a critically damped spring (zero overshoot)
+      const displacement = position - target;
+      const decay = Math.exp(-ARROW_SPRING_OMEGA * dt);
+      const c1 = displacement;
+      const c2 = velocity + ARROW_SPRING_OMEGA * displacement;
+      position = target + (c1 + c2 * dt) * decay;
+      velocity = (c2 - ARROW_SPRING_OMEGA * (c1 + c2 * dt)) * decay;
+
+      if (position <= 0 || (target === 0 && position < SETTLE_POSITION_EPSILON_PX)) {
+        position = 0;
+        if (velocity < 0 || target === 0) velocity = 0;
+      } else if (
+        position >= maxScroll ||
+        (target === maxScroll && maxScroll - position < SETTLE_POSITION_EPSILON_PX)
+      ) {
+        position = maxScroll;
+        if (velocity > 0 || target === maxScroll) velocity = 0;
+      }
+
+      if (
+        heldDir === 0 &&
+        Math.abs(target - position) < SETTLE_POSITION_EPSILON_PX &&
+        Math.abs(velocity) < SETTLE_VELOCITY_EPSILON_PX_PER_SEC
+      ) {
+        position = target;
+        velocity = 0;
+        setScrollTopInstant(scroller, Math.round(position));
+        stop();
+        return;
+      }
+
+      if (Math.abs(position - currentDomScrollTop) >= 0.01) {
+        setScrollTopInstant(scroller, position);
+      }
+      lastAppliedScrollTop = scroller.scrollTop || 0;
+
+      rafId = requestFrame(tick);
+    }
+
+    function press(direction) {
+      const scroller = typeof getScroller === 'function' ? getScroller() : null;
+      if (!scroller || (direction !== -1 && direction !== 1)) {
+        return false;
+      }
+
+      const reducedMotion = typeof prefersReducedMotion === 'function' && Boolean(prefersReducedMotion());
+      if (typeof requestFrame !== 'function' || reducedMotion) {
+        return applyScrollAction(scroller, {
+          type: 'by',
+          delta: direction * ARROW_SCROLL_STEP_PX,
+          behavior: reducedMotion ? 'instant' : 'smooth',
+        });
+      }
+
+      if (heldDirections.includes(direction)) {
+        return true;
+      }
+
+      if (rafId === null || activeScroller !== scroller) {
+        activeScroller = scroller;
+        position = scroller.scrollTop || 0;
+        target = position;
+        velocity = 0;
+        lastAppliedScrollTop = position;
+        lastTimestamp = null;
+      }
+
+      heldDirections.push(direction);
+      holdElapsed = 0;
+
+      const maxScroll = getMaxScrollTop(scroller);
+      if (Math.sign(target - position) !== direction) {
+        target = position;
+      }
+      target = clampScrollTop(target + direction * ARROW_SCROLL_STEP_PX, maxScroll);
+
+      if (rafId === null) {
+        rafId = requestFrame(tick);
+      }
+
+      return true;
+    }
+
+    function release(direction) {
+      const idx = heldDirections.indexOf(direction);
+      if (idx === -1) return;
+      heldDirections.splice(idx, 1);
+      if (heldDirections.length > 0) {
+        holdElapsed = 0;
+      }
+    }
+
+    function isActive() {
+      return rafId !== null;
+    }
+
+    return {
+      press,
+      release,
+      stop,
+      isActive,
+    };
   }
 
   // --- src/lib/dom.js ---
@@ -336,7 +554,27 @@
     let buttonEl = null;
     let observer = null;
     let syncScheduled = false;
-    const keyTarget = doc.defaultView || doc;
+    const view = doc.defaultView || null;
+    const keyTarget = view || doc;
+
+    const arrowScroller = createSmoothArrowScroller({
+      getScroller: () => findChatScroller(doc),
+      requestFrame:
+        view && typeof view.requestAnimationFrame === 'function'
+          ? (cb) => view.requestAnimationFrame(cb)
+          : null,
+      cancelFrame:
+        view && typeof view.cancelAnimationFrame === 'function'
+          ? (id) => view.cancelAnimationFrame(id)
+          : null,
+      prefersReducedMotion: () => {
+        try {
+          return Boolean(view?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+        } catch {
+          return false;
+        }
+      },
+    });
 
     function focusElement(el) {
       if (!el || typeof el.focus !== 'function') return false;
@@ -362,16 +600,31 @@
     }
 
     function handleButtonBlur() {
+      arrowScroller.stop();
       setButtonFocused(false);
+    }
+
+    function handleWindowBlur() {
+      arrowScroller.stop();
+    }
+
+    function handleDocumentKeyUp(event) {
+      if (event.key === 'ArrowUp') {
+        arrowScroller.release(-1);
+      } else if (event.key === 'ArrowDown') {
+        arrowScroller.release(1);
+      }
     }
 
     function handleDocumentFocusIn(event) {
       if (buttonEl && event.target !== buttonEl) {
+        arrowScroller.stop();
         setButtonFocused(false);
       }
     }
 
     function skipToPreviousPrompt() {
+      arrowScroller.stop();
       const scroller = findChatScroller(doc);
       if (!scroller) return false;
 
@@ -388,6 +641,7 @@
 
     function handleButtonKeyDown(event) {
       if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+        arrowScroller.stop();
         if (!event.shiftKey) {
           const input = findPromptInput(doc);
           if (input) {
@@ -410,6 +664,7 @@
       }
 
       if (event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+        arrowScroller.stop();
         const input = findPromptInput(doc);
         if (input) {
           event.preventDefault();
@@ -432,9 +687,25 @@
         return;
       }
 
+      if (
+        (event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey
+      ) {
+        const direction = event.key === 'ArrowUp' ? -1 : 1;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat || !arrowScroller.isActive()) {
+          arrowScroller.press(direction);
+        }
+        return;
+      }
+
       const scroller = findChatScroller(doc);
       const action = computeScrollAction(event, scroller);
       if (action) {
+        arrowScroller.stop();
         event.preventDefault();
         event.stopPropagation();
         applyScrollAction(scroller, action);
@@ -526,6 +797,8 @@
     function init() {
       injectStyles(SKIP_BUTTON_STYLES, SKIP_FEATURE_ID, doc);
       keyTarget.addEventListener('keydown', handleDocumentKeyDown, true);
+      keyTarget.addEventListener('keyup', handleDocumentKeyUp, true);
+      keyTarget.addEventListener('blur', handleWindowBlur);
       doc.addEventListener('focusin', handleDocumentFocusIn, true);
       sync();
 
@@ -541,7 +814,10 @@
     }
 
     function destroy() {
+      arrowScroller.stop();
       keyTarget.removeEventListener('keydown', handleDocumentKeyDown, true);
+      keyTarget.removeEventListener('keyup', handleDocumentKeyUp, true);
+      keyTarget.removeEventListener('blur', handleWindowBlur);
       doc.removeEventListener('focusin', handleDocumentFocusIn, true);
       if (observer) {
         observer.disconnect();
