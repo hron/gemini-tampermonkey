@@ -1,4 +1,5 @@
 import {
+  createDocumentScrollerOptions,
   findChatScroller,
   findInputAnchor,
   findLeadingActionButton,
@@ -12,6 +13,7 @@ import {
   applyScrollAction,
   computeScrollAction,
   createSmoothArrowScroller,
+  createSmoothPageScroller,
   findPreviousPromptScrollTop,
 } from '../lib/scrolling.js';
 
@@ -132,24 +134,15 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
   const view = doc.defaultView || null;
   const keyTarget = view || doc;
 
-  const arrowScroller = createSmoothArrowScroller({
-    getScroller: () => findChatScroller(doc),
-    requestFrame:
-      view && typeof view.requestAnimationFrame === 'function'
-        ? (cb) => view.requestAnimationFrame(cb)
-        : null,
-    cancelFrame:
-      view && typeof view.cancelAnimationFrame === 'function'
-        ? (id) => view.cancelAnimationFrame(id)
-        : null,
-    prefersReducedMotion: () => {
-      try {
-        return Boolean(view?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
-      } catch {
-        return false;
-      }
-    },
-  });
+  const smoothScrollerOptions = createDocumentScrollerOptions(doc);
+
+  const arrowScroller = createSmoothArrowScroller(smoothScrollerOptions);
+  const pageScroller = createSmoothPageScroller(smoothScrollerOptions);
+
+  function stopAllSmoothScroll() {
+    arrowScroller.stop();
+    pageScroller.stop();
+  }
 
   function focusElement(el) {
     if (!el || typeof el.focus !== 'function') return false;
@@ -175,12 +168,12 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
   }
 
   function handleButtonBlur() {
-    arrowScroller.stop();
+    stopAllSmoothScroll();
     setButtonFocused(false);
   }
 
   function handleWindowBlur() {
-    arrowScroller.stop();
+    stopAllSmoothScroll();
   }
 
   function handleDocumentKeyUp(event) {
@@ -188,18 +181,22 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
       arrowScroller.release(-1);
     } else if (event.key === 'ArrowDown') {
       arrowScroller.release(1);
+    } else if (event.key === 'PageUp') {
+      pageScroller.release(-1);
+    } else if (event.key === 'PageDown') {
+      pageScroller.release(1);
     }
   }
 
   function handleDocumentFocusIn(event) {
     if (buttonEl && event.target !== buttonEl) {
-      arrowScroller.stop();
+      stopAllSmoothScroll();
       setButtonFocused(false);
     }
   }
 
   function skipToPreviousPrompt() {
-    arrowScroller.stop();
+    stopAllSmoothScroll();
     const scroller = findChatScroller(doc);
     if (!scroller) return false;
 
@@ -216,7 +213,7 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
 
   function handleButtonKeyDown(event) {
     if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
-      arrowScroller.stop();
+      stopAllSmoothScroll();
       if (!event.shiftKey) {
         const input = findPromptInput(doc);
         if (input) {
@@ -239,7 +236,7 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
     }
 
     if (event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.metaKey) {
-      arrowScroller.stop();
+      stopAllSmoothScroll();
       const input = findPromptInput(doc);
       if (input) {
         event.preventDefault();
@@ -268,6 +265,7 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
       !event.altKey &&
       !event.metaKey
     ) {
+      pageScroller.stop();
       const direction = event.key === 'ArrowUp' ? -1 : 1;
       event.preventDefault();
       event.stopPropagation();
@@ -277,10 +275,26 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
       return;
     }
 
+    if (
+      (event.key === 'PageUp' || event.key === 'PageDown') &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey
+    ) {
+      arrowScroller.stop();
+      const direction = event.key === 'PageUp' ? -1 : 1;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat || !pageScroller.isActive()) {
+        pageScroller.press(direction);
+      }
+      return;
+    }
+
     const scroller = findChatScroller(doc);
     const action = computeScrollAction(event, scroller);
     if (action) {
-      arrowScroller.stop();
+      stopAllSmoothScroll();
       event.preventDefault();
       event.stopPropagation();
       applyScrollAction(scroller, action);
@@ -389,7 +403,7 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
   }
 
   function destroy() {
-    arrowScroller.stop();
+    stopAllSmoothScroll();
     keyTarget.removeEventListener('keydown', handleDocumentKeyDown, true);
     keyTarget.removeEventListener('keyup', handleDocumentKeyUp, true);
     keyTarget.removeEventListener('blur', handleWindowBlur);

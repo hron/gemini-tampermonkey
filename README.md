@@ -4,6 +4,13 @@ A modular Tampermonkey userscript that adds missing keyboard navigation and shor
 
 ## Features
 
+### Smooth `PageUp` / `PageDown` scrolling while input is focused
+Scroll the Gemini conversation smoothly without leaving the prompt input:
+
+- Press **`PageUp`** / **`PageDown`** while focused in the prompt input (or anywhere in the chat) to smoothly scroll the chat history by a page while keeping focus in the prompt box.
+- Rapid taps accumulate smoothly without losing distance, and holding **`PageUp`** / **`PageDown`** transitions into continuous smooth scrolling that coasts to a stop on release.
+- Modifier combos like **`Shift+PageUp`** / **`Shift+PageDown`** (text selection) and **`Ctrl+PageUp`** / **`Ctrl+PageDown`** (tab switching), as well as dialogs, menus, sidebar scrolling, and inline edit fields, are left untouched.
+
 ### Skip to previous prompt & keyboard scrolling
 Replicates Google Search AI Mode's `"Skip to previous prompt"` workflow on Gemini:
 

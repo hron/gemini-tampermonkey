@@ -1,8 +1,10 @@
+import { createPageScrollFeature } from './features/page-scroll.js';
 import { createSkipToPreviousPromptFeature } from './features/skip-to-previous-prompt.js';
 
 export function bootstrapGeminiShortcuts(doc = document) {
   const features = [
     createSkipToPreviousPromptFeature({ doc, observe: true }),
+    createPageScrollFeature({ doc }),
   ];
 
   for (const feature of features) {

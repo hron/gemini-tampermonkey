@@ -4,6 +4,9 @@ export const ARROW_HOLD_DELAY_SEC = 0.08;
 export const ARROW_SPRING_OMEGA = 20;
 export const PAGE_SCROLL_RATIO = 0.85;
 export const MIN_PAGE_SCROLL_PX = 100;
+export const PAGE_SPRING_OMEGA = 16;
+export const PAGE_HOLD_DELAY_SEC = 0.24;
+export const PAGE_HOLD_SPEED_PAGES_PER_SEC = 2.6;
 export const PROMPT_SCROLL_PADDING_PX = 16;
 export const PROMPT_SCROLL_TOLERANCE_PX = 12;
 
@@ -12,6 +15,11 @@ const DEFAULT_FIRST_FRAME_DT_SEC = 1 / 60;
 const SETTLE_POSITION_EPSILON_PX = 0.5;
 const SETTLE_VELOCITY_EPSILON_PX_PER_SEC = 5;
 const EXTERNAL_SCROLL_TOLERANCE_PX = 2;
+
+export function computePageStep(scrollerMetrics) {
+  const clientHeight = scrollerMetrics?.clientHeight || 600;
+  return Math.max(MIN_PAGE_SCROLL_PX, Math.round(clientHeight * PAGE_SCROLL_RATIO));
+}
 
 /**
  * Translates a keyboard event on the skip control into a scroll action
@@ -22,9 +30,8 @@ export function computeScrollAction(event, scrollerMetrics) {
     return null;
   }
 
-  const clientHeight = scrollerMetrics?.clientHeight || 600;
   const scrollHeight = scrollerMetrics?.scrollHeight || 0;
-  const pageStep = Math.max(MIN_PAGE_SCROLL_PX, Math.round(clientHeight * PAGE_SCROLL_RATIO));
+  const pageStep = computePageStep(scrollerMetrics);
   const pageBehavior = event.repeat ? 'instant' : 'smooth';
 
   switch (event.key) {
@@ -140,18 +147,34 @@ function clampScrollTop(value, maxScroll) {
   return Math.max(0, Math.min(maxScroll, value));
 }
 
+function stepCriticallyDampedSpring(position, velocity, target, omega, dt) {
+  const displacement = position - target;
+  const decay = Math.exp(-omega * dt);
+  const c1 = displacement;
+  const c2 = velocity + omega * displacement;
+  return {
+    position: target + (c1 + c2 * dt) * decay,
+    velocity: (c2 - omega * (c1 + c2 * dt)) * decay,
+  };
+}
+
 /**
- * Drives continuous, frame-rate-independent smooth arrow scrolling via
- * requestAnimationFrame using a critically damped spring:
- * - Short taps smoothly glide by ARROW_SCROLL_STEP_PX without overshoot.
+ * Shared frame-rate-independent smooth scroller driven by a critically damped
+ * spring over requestAnimationFrame:
+ * - Short taps glide smoothly by one step without overshoot.
  * - Rapid taps accumulate seamlessly.
- * - Holding an arrow key transitions into continuous glide and coasts smoothly on release.
+ * - Reversing mid-glide decelerates and turns around smoothly.
+ * - Holding transitions into continuous smooth glide and coasts to rest on release.
  */
-export function createSmoothArrowScroller({
+function createSpringScroller({
   getScroller,
   requestFrame = null,
   cancelFrame = null,
   prefersReducedMotion = null,
+  getStepPx,
+  getHoldSpeedPxPerSec,
+  holdDelaySec,
+  springOmega,
 } = {}) {
   const heldDirections = [];
   let activeScroller = null;
@@ -200,7 +223,7 @@ export function createSmoothArrowScroller({
         return;
       }
       position = currentDomScrollTop;
-      target = clampScrollTop(position + heldDir * ARROW_SCROLL_STEP_PX, maxScroll);
+      target = clampScrollTop(position + heldDir * getStepPx(scroller), maxScroll);
       velocity = 0;
     }
 
@@ -212,8 +235,11 @@ export function createSmoothArrowScroller({
 
     if (heldDir !== 0) {
       holdElapsed += dt;
-      if (holdElapsed > ARROW_HOLD_DELAY_SEC) {
-        target = clampScrollTop(target + heldDir * ARROW_HOLD_SPEED_PX_PER_SEC * dt, maxScroll);
+      if (holdElapsed > holdDelaySec) {
+        target = clampScrollTop(
+          target + heldDir * getHoldSpeedPxPerSec(scroller) * dt,
+          maxScroll,
+        );
       } else {
         target = clampScrollTop(target, maxScroll);
       }
@@ -222,12 +248,13 @@ export function createSmoothArrowScroller({
     }
 
     // Exact analytical step for a critically damped spring (zero overshoot)
-    const displacement = position - target;
-    const decay = Math.exp(-ARROW_SPRING_OMEGA * dt);
-    const c1 = displacement;
-    const c2 = velocity + ARROW_SPRING_OMEGA * displacement;
-    position = target + (c1 + c2 * dt) * decay;
-    velocity = (c2 - ARROW_SPRING_OMEGA * (c1 + c2 * dt)) * decay;
+    ({ position, velocity } = stepCriticallyDampedSpring(
+      position,
+      velocity,
+      target,
+      springOmega,
+      dt,
+    ));
 
     if (position <= 0 || (target === 0 && position < SETTLE_POSITION_EPSILON_PX)) {
       position = 0;
@@ -266,11 +293,12 @@ export function createSmoothArrowScroller({
       return false;
     }
 
+    const stepPx = getStepPx(scroller);
     const reducedMotion = typeof prefersReducedMotion === 'function' && Boolean(prefersReducedMotion());
     if (typeof requestFrame !== 'function' || reducedMotion) {
       return applyScrollAction(scroller, {
         type: 'by',
-        delta: direction * ARROW_SCROLL_STEP_PX,
+        delta: direction * stepPx,
         behavior: reducedMotion ? 'instant' : 'smooth',
       });
     }
@@ -295,9 +323,13 @@ export function createSmoothArrowScroller({
     if (Math.sign(target - position) !== direction) {
       target = position;
     }
-    target = clampScrollTop(target + direction * ARROW_SCROLL_STEP_PX, maxScroll);
+    target = clampScrollTop(target + direction * stepPx, maxScroll);
 
     if (rafId === null) {
+      if (Math.abs(target - position) < SETTLE_POSITION_EPSILON_PX && velocity === 0) {
+        heldDirections.length = 0;
+        return true;
+      }
       rafId = requestFrame(tick);
     }
 
@@ -323,4 +355,32 @@ export function createSmoothArrowScroller({
     stop,
     isActive,
   };
+}
+
+/**
+ * Drives continuous, frame-rate-independent smooth arrow scrolling via
+ * requestAnimationFrame using a critically damped spring.
+ */
+export function createSmoothArrowScroller(options = {}) {
+  return createSpringScroller({
+    ...options,
+    getStepPx: () => ARROW_SCROLL_STEP_PX,
+    getHoldSpeedPxPerSec: () => ARROW_HOLD_SPEED_PX_PER_SEC,
+    holdDelaySec: ARROW_HOLD_DELAY_SEC,
+    springOmega: ARROW_SPRING_OMEGA,
+  });
+}
+
+/**
+ * Drives continuous, frame-rate-independent smooth PageUp / PageDown scrolling
+ * via requestAnimationFrame using a critically damped spring.
+ */
+export function createSmoothPageScroller(options = {}) {
+  return createSpringScroller({
+    ...options,
+    getStepPx: computePageStep,
+    getHoldSpeedPxPerSec: (scroller) => computePageStep(scroller) * PAGE_HOLD_SPEED_PAGES_PER_SEC,
+    holdDelaySec: PAGE_HOLD_DELAY_SEC,
+    springOmega: PAGE_SPRING_OMEGA,
+  });
 }

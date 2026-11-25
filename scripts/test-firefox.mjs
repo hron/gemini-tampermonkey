@@ -213,6 +213,71 @@ async function verifyScenario(context, url, label) {
   });
   await new Promise((r) => setTimeout(r, 150));
 
+  // PageUp while prompt input is focused -> scrolls smoothly without leaving input
+  const beforeInputPageUp = await getState();
+  assert.equal(beforeInputPageUp.activeAria, 'Enter a prompt for Gemini', `${label}: input focused before PageUp`);
+  await press('\uE00E', false, 90);
+  const midInputPageUp = await getState();
+  await new Promise((r) => setTimeout(r, 500));
+  const afterInputPageUp = await getState();
+  assert.equal(afterInputPageUp.activeAria, 'Enter a prompt for Gemini', `${label}: input stays focused on PageUp`);
+  assert.ok(
+    afterInputPageUp.scrollTop < beforeInputPageUp.scrollTop - 150,
+    `${label}: PageUp while input focused scrolls up a page (${beforeInputPageUp.scrollTop} -> ${afterInputPageUp.scrollTop})`,
+  );
+  assert.ok(
+    midInputPageUp.scrollTop < beforeInputPageUp.scrollTop &&
+      midInputPageUp.scrollTop > afterInputPageUp.scrollTop,
+    `${label}: PageUp while input focused animates smoothly (start=${beforeInputPageUp.scrollTop}, mid=${midInputPageUp.scrollTop}, end=${afterInputPageUp.scrollTop})`,
+  );
+
+  // PageDown while prompt input is focused -> smoothly scrolls back down without leaving input
+  await press('\uE00F', false, 550);
+  const afterInputPageDown = await getState();
+  assert.equal(afterInputPageDown.activeAria, 'Enter a prompt for Gemini', `${label}: input stays focused on PageDown`);
+  assert.ok(
+    afterInputPageDown.scrollTop > afterInputPageUp.scrollTop + 150,
+    `${label}: PageDown while input focused scrolls down a page (${afterInputPageUp.scrollTop} -> ${afterInputPageDown.scrollTop})`,
+  );
+
+  // Rapid double-tap PageUp while input is focused accumulates smoothly beyond a single page
+  const singlePageDelta = beforeInputPageUp.scrollTop - afterInputPageUp.scrollTop;
+  await press('\uE00E', false, 60);
+  await press('\uE00E', false, 650);
+  const afterDoublePageUp = await getState();
+  assert.equal(afterDoublePageUp.activeAria, 'Enter a prompt for Gemini', `${label}: input stays focused after rapid PageUp`);
+  assert.ok(
+    afterInputPageDown.scrollTop - afterDoublePageUp.scrollTop > singlePageDelta * 1.25,
+    `${label}: rapid PageUp taps accumulate smoothly (moved ${afterInputPageDown.scrollTop - afterDoublePageUp.scrollTop}px vs single ${singlePageDelta}px)`,
+  );
+
+  // Shift+PageDown while input is focused is ignored (preserves text selection)
+  await press('\uE00F', true, 200);
+  const afterShiftPageDown = await getState();
+  assert.equal(
+    afterShiftPageDown.scrollTop,
+    afterDoublePageUp.scrollTop,
+    `${label}: Shift+PageDown does not hijack chat scroll`,
+  );
+
+  // Hold PageDown back to bottom smoothly while input is focused
+  await send('input.performActions', {
+    context,
+    actions: [{ type: 'key', id: 'kbd', actions: [{ type: 'keyDown', value: '\uE00F' }] }],
+  });
+  await new Promise((r) => setTimeout(r, 700));
+  await send('input.performActions', {
+    context,
+    actions: [{ type: 'key', id: 'kbd', actions: [{ type: 'keyUp', value: '\uE00F' }] }],
+  });
+  await new Promise((r) => setTimeout(r, 450));
+  const afterHoldInputPageDown = await getState();
+  assert.equal(afterHoldInputPageDown.activeAria, 'Enter a prompt for Gemini', `${label}: input stays focused after held PageDown`);
+  assert.ok(
+    afterHoldInputPageDown.scrollTop > afterDoublePageUp.scrollTop + singlePageDelta * 1.2,
+    `${label}: holding PageDown while input focused smoothly scrolls back down (${afterDoublePageUp.scrollTop} -> ${afterHoldInputPageDown.scrollTop})`,
+  );
+
   // Shift+Tab -> focuses and reveals skip button
   await press('\uE004', true, 250);
   const afterShiftTab = await getState();

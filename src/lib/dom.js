@@ -55,6 +55,28 @@ export function findChatScroller(doc = document) {
   return null;
 }
 
+export function createDocumentScrollerOptions(doc = document) {
+  const view = doc?.defaultView || null;
+  return {
+    getScroller: () => findChatScroller(doc),
+    requestFrame:
+      view && typeof view.requestAnimationFrame === 'function'
+        ? (cb) => view.requestAnimationFrame(cb)
+        : null,
+    cancelFrame:
+      view && typeof view.cancelAnimationFrame === 'function'
+        ? (id) => view.cancelAnimationFrame(id)
+        : null,
+    prefersReducedMotion: () => {
+      try {
+        return Boolean(view?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
 export function findLeadingActionButton(doc = document) {
   return doc.querySelector(LEADING_ACTION_BUTTON_SELECTOR);
 }

@@ -464,11 +464,26 @@ describe('skip-to-previous-prompt feature', () => {
     advanceMs(600);
     assert.equal(frames.size, 0);
 
-    // Pressing PageUp cancels any in-flight arrow motion cleanly
+    // Pressing PageUp cancels any in-flight arrow motion and smoothly glides up a page
     btn.dispatchEvent(createFakeEvent('keydown', { key: 'ArrowUp', repeat: false, target: btn }));
     advanceMs(50);
     assert.ok(frames.size > 0);
+    const beforePageUp = env.scroller.scrollTop;
     btn.dispatchEvent(createFakeEvent('keydown', { key: 'PageUp', repeat: false, target: btn }));
+    env.doc.defaultView.dispatchEvent(createFakeEvent('keyup', { key: 'PageUp' }));
+    assert.equal(frames.size, 1, 'should replace arrow rAF with smooth page-scroll rAF');
+    advanceMs(700);
+    assert.equal(frames.size, 0, 'smooth page scroll should settle cleanly');
+    assert.ok(
+      env.scroller.scrollTop < beforePageUp - 600,
+      `PageUp should smoothly scroll up a full page from ${beforePageUp}, got ${env.scroller.scrollTop}`,
+    );
+
+    // Pressing Home cancels any in-flight smooth motion cleanly
+    btn.dispatchEvent(createFakeEvent('keydown', { key: 'ArrowDown', repeat: false, target: btn }));
+    advanceMs(50);
+    assert.ok(frames.size > 0);
+    btn.dispatchEvent(createFakeEvent('keydown', { key: 'Home', repeat: false, target: btn }));
     assert.equal(frames.size, 0);
 
     feature.destroy();

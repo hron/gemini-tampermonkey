@@ -11,6 +11,7 @@ const SOURCE_FILES = [
   'src/lib/scrolling.js',
   'src/lib/dom.js',
   'src/features/skip-to-previous-prompt.js',
+  'src/features/page-scroll.js',
   'src/main.js',
 ];
 

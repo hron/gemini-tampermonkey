@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gemini Keyboard Shortcuts
 // @namespace    https://github.com/gemini-tampermonkey
-// @version      0.1.1
-// @description  Adds missing keyboard shortcuts to gemini.google.com, starting with Google AI Mode's "Skip to previous prompt" and keyboard output scrolling.
+// @version      0.2.0
+// @description  Adds missing keyboard shortcuts to gemini.google.com, including smooth PageUp/PageDown scrolling while the prompt input is focused and Google AI Mode's "Skip to previous prompt".
 // @author       You
 // @match        https://gemini.google.com/*
 // @grant        GM_addStyle
@@ -20,6 +20,9 @@
   const ARROW_SPRING_OMEGA = 20;
   const PAGE_SCROLL_RATIO = 0.85;
   const MIN_PAGE_SCROLL_PX = 100;
+  const PAGE_SPRING_OMEGA = 16;
+  const PAGE_HOLD_DELAY_SEC = 0.24;
+  const PAGE_HOLD_SPEED_PAGES_PER_SEC = 2.6;
   const PROMPT_SCROLL_PADDING_PX = 16;
   const PROMPT_SCROLL_TOLERANCE_PX = 12;
 
@@ -28,6 +31,11 @@
   const SETTLE_POSITION_EPSILON_PX = 0.5;
   const SETTLE_VELOCITY_EPSILON_PX_PER_SEC = 5;
   const EXTERNAL_SCROLL_TOLERANCE_PX = 2;
+
+  function computePageStep(scrollerMetrics) {
+    const clientHeight = scrollerMetrics?.clientHeight || 600;
+    return Math.max(MIN_PAGE_SCROLL_PX, Math.round(clientHeight * PAGE_SCROLL_RATIO));
+  }
 
   /**
    * Translates a keyboard event on the skip control into a scroll action
@@ -38,9 +46,8 @@
       return null;
     }
 
-    const clientHeight = scrollerMetrics?.clientHeight || 600;
     const scrollHeight = scrollerMetrics?.scrollHeight || 0;
-    const pageStep = Math.max(MIN_PAGE_SCROLL_PX, Math.round(clientHeight * PAGE_SCROLL_RATIO));
+    const pageStep = computePageStep(scrollerMetrics);
     const pageBehavior = event.repeat ? 'instant' : 'smooth';
 
     switch (event.key) {
@@ -156,18 +163,34 @@
     return Math.max(0, Math.min(maxScroll, value));
   }
 
+  function stepCriticallyDampedSpring(position, velocity, target, omega, dt) {
+    const displacement = position - target;
+    const decay = Math.exp(-omega * dt);
+    const c1 = displacement;
+    const c2 = velocity + omega * displacement;
+    return {
+      position: target + (c1 + c2 * dt) * decay,
+      velocity: (c2 - omega * (c1 + c2 * dt)) * decay,
+    };
+  }
+
   /**
-   * Drives continuous, frame-rate-independent smooth arrow scrolling via
-   * requestAnimationFrame using a critically damped spring:
-   * - Short taps smoothly glide by ARROW_SCROLL_STEP_PX without overshoot.
+   * Shared frame-rate-independent smooth scroller driven by a critically damped
+   * spring over requestAnimationFrame:
+   * - Short taps glide smoothly by one step without overshoot.
    * - Rapid taps accumulate seamlessly.
-   * - Holding an arrow key transitions into continuous glide and coasts smoothly on release.
+   * - Reversing mid-glide decelerates and turns around smoothly.
+   * - Holding transitions into continuous smooth glide and coasts to rest on release.
    */
-  function createSmoothArrowScroller({
+  function createSpringScroller({
     getScroller,
     requestFrame = null,
     cancelFrame = null,
     prefersReducedMotion = null,
+    getStepPx,
+    getHoldSpeedPxPerSec,
+    holdDelaySec,
+    springOmega,
   } = {}) {
     const heldDirections = [];
     let activeScroller = null;
@@ -216,7 +239,7 @@
           return;
         }
         position = currentDomScrollTop;
-        target = clampScrollTop(position + heldDir * ARROW_SCROLL_STEP_PX, maxScroll);
+        target = clampScrollTop(position + heldDir * getStepPx(scroller), maxScroll);
         velocity = 0;
       }
 
@@ -228,8 +251,11 @@
 
       if (heldDir !== 0) {
         holdElapsed += dt;
-        if (holdElapsed > ARROW_HOLD_DELAY_SEC) {
-          target = clampScrollTop(target + heldDir * ARROW_HOLD_SPEED_PX_PER_SEC * dt, maxScroll);
+        if (holdElapsed > holdDelaySec) {
+          target = clampScrollTop(
+            target + heldDir * getHoldSpeedPxPerSec(scroller) * dt,
+            maxScroll,
+          );
         } else {
           target = clampScrollTop(target, maxScroll);
         }
@@ -238,12 +264,13 @@
       }
 
       // Exact analytical step for a critically damped spring (zero overshoot)
-      const displacement = position - target;
-      const decay = Math.exp(-ARROW_SPRING_OMEGA * dt);
-      const c1 = displacement;
-      const c2 = velocity + ARROW_SPRING_OMEGA * displacement;
-      position = target + (c1 + c2 * dt) * decay;
-      velocity = (c2 - ARROW_SPRING_OMEGA * (c1 + c2 * dt)) * decay;
+      ({ position, velocity } = stepCriticallyDampedSpring(
+        position,
+        velocity,
+        target,
+        springOmega,
+        dt,
+      ));
 
       if (position <= 0 || (target === 0 && position < SETTLE_POSITION_EPSILON_PX)) {
         position = 0;
@@ -282,11 +309,12 @@
         return false;
       }
 
+      const stepPx = getStepPx(scroller);
       const reducedMotion = typeof prefersReducedMotion === 'function' && Boolean(prefersReducedMotion());
       if (typeof requestFrame !== 'function' || reducedMotion) {
         return applyScrollAction(scroller, {
           type: 'by',
-          delta: direction * ARROW_SCROLL_STEP_PX,
+          delta: direction * stepPx,
           behavior: reducedMotion ? 'instant' : 'smooth',
         });
       }
@@ -311,9 +339,13 @@
       if (Math.sign(target - position) !== direction) {
         target = position;
       }
-      target = clampScrollTop(target + direction * ARROW_SCROLL_STEP_PX, maxScroll);
+      target = clampScrollTop(target + direction * stepPx, maxScroll);
 
       if (rafId === null) {
+        if (Math.abs(target - position) < SETTLE_POSITION_EPSILON_PX && velocity === 0) {
+          heldDirections.length = 0;
+          return true;
+        }
         rafId = requestFrame(tick);
       }
 
@@ -339,6 +371,34 @@
       stop,
       isActive,
     };
+  }
+
+  /**
+   * Drives continuous, frame-rate-independent smooth arrow scrolling via
+   * requestAnimationFrame using a critically damped spring.
+   */
+  function createSmoothArrowScroller(options = {}) {
+    return createSpringScroller({
+      ...options,
+      getStepPx: () => ARROW_SCROLL_STEP_PX,
+      getHoldSpeedPxPerSec: () => ARROW_HOLD_SPEED_PX_PER_SEC,
+      holdDelaySec: ARROW_HOLD_DELAY_SEC,
+      springOmega: ARROW_SPRING_OMEGA,
+    });
+  }
+
+  /**
+   * Drives continuous, frame-rate-independent smooth PageUp / PageDown scrolling
+   * via requestAnimationFrame using a critically damped spring.
+   */
+  function createSmoothPageScroller(options = {}) {
+    return createSpringScroller({
+      ...options,
+      getStepPx: computePageStep,
+      getHoldSpeedPxPerSec: (scroller) => computePageStep(scroller) * PAGE_HOLD_SPEED_PAGES_PER_SEC,
+      holdDelaySec: PAGE_HOLD_DELAY_SEC,
+      springOmega: PAGE_SPRING_OMEGA,
+    });
   }
 
   // --- src/lib/dom.js ---
@@ -397,6 +457,28 @@
       if (el) return el;
     }
     return null;
+  }
+
+  function createDocumentScrollerOptions(doc = document) {
+    const view = doc?.defaultView || null;
+    return {
+      getScroller: () => findChatScroller(doc),
+      requestFrame:
+        view && typeof view.requestAnimationFrame === 'function'
+          ? (cb) => view.requestAnimationFrame(cb)
+          : null,
+      cancelFrame:
+        view && typeof view.cancelAnimationFrame === 'function'
+          ? (id) => view.cancelAnimationFrame(id)
+          : null,
+      prefersReducedMotion: () => {
+        try {
+          return Boolean(view?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+        } catch {
+          return false;
+        }
+      },
+    };
   }
 
   function findLeadingActionButton(doc = document) {
@@ -557,24 +639,15 @@
     const view = doc.defaultView || null;
     const keyTarget = view || doc;
 
-    const arrowScroller = createSmoothArrowScroller({
-      getScroller: () => findChatScroller(doc),
-      requestFrame:
-        view && typeof view.requestAnimationFrame === 'function'
-          ? (cb) => view.requestAnimationFrame(cb)
-          : null,
-      cancelFrame:
-        view && typeof view.cancelAnimationFrame === 'function'
-          ? (id) => view.cancelAnimationFrame(id)
-          : null,
-      prefersReducedMotion: () => {
-        try {
-          return Boolean(view?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
-        } catch {
-          return false;
-        }
-      },
-    });
+    const smoothScrollerOptions = createDocumentScrollerOptions(doc);
+
+    const arrowScroller = createSmoothArrowScroller(smoothScrollerOptions);
+    const pageScroller = createSmoothPageScroller(smoothScrollerOptions);
+
+    function stopAllSmoothScroll() {
+      arrowScroller.stop();
+      pageScroller.stop();
+    }
 
     function focusElement(el) {
       if (!el || typeof el.focus !== 'function') return false;
@@ -600,12 +673,12 @@
     }
 
     function handleButtonBlur() {
-      arrowScroller.stop();
+      stopAllSmoothScroll();
       setButtonFocused(false);
     }
 
     function handleWindowBlur() {
-      arrowScroller.stop();
+      stopAllSmoothScroll();
     }
 
     function handleDocumentKeyUp(event) {
@@ -613,18 +686,22 @@
         arrowScroller.release(-1);
       } else if (event.key === 'ArrowDown') {
         arrowScroller.release(1);
+      } else if (event.key === 'PageUp') {
+        pageScroller.release(-1);
+      } else if (event.key === 'PageDown') {
+        pageScroller.release(1);
       }
     }
 
     function handleDocumentFocusIn(event) {
       if (buttonEl && event.target !== buttonEl) {
-        arrowScroller.stop();
+        stopAllSmoothScroll();
         setButtonFocused(false);
       }
     }
 
     function skipToPreviousPrompt() {
-      arrowScroller.stop();
+      stopAllSmoothScroll();
       const scroller = findChatScroller(doc);
       if (!scroller) return false;
 
@@ -641,7 +718,7 @@
 
     function handleButtonKeyDown(event) {
       if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
-        arrowScroller.stop();
+        stopAllSmoothScroll();
         if (!event.shiftKey) {
           const input = findPromptInput(doc);
           if (input) {
@@ -664,7 +741,7 @@
       }
 
       if (event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.metaKey) {
-        arrowScroller.stop();
+        stopAllSmoothScroll();
         const input = findPromptInput(doc);
         if (input) {
           event.preventDefault();
@@ -693,6 +770,7 @@
         !event.altKey &&
         !event.metaKey
       ) {
+        pageScroller.stop();
         const direction = event.key === 'ArrowUp' ? -1 : 1;
         event.preventDefault();
         event.stopPropagation();
@@ -702,10 +780,26 @@
         return;
       }
 
+      if (
+        (event.key === 'PageUp' || event.key === 'PageDown') &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey
+      ) {
+        arrowScroller.stop();
+        const direction = event.key === 'PageUp' ? -1 : 1;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat || !pageScroller.isActive()) {
+          pageScroller.press(direction);
+        }
+        return;
+      }
+
       const scroller = findChatScroller(doc);
       const action = computeScrollAction(event, scroller);
       if (action) {
-        arrowScroller.stop();
+        stopAllSmoothScroll();
         event.preventDefault();
         event.stopPropagation();
         applyScrollAction(scroller, action);
@@ -814,7 +908,7 @@
     }
 
     function destroy() {
-      arrowScroller.stop();
+      stopAllSmoothScroll();
       keyTarget.removeEventListener('keydown', handleDocumentKeyDown, true);
       keyTarget.removeEventListener('keyup', handleDocumentKeyUp, true);
       keyTarget.removeEventListener('blur', handleWindowBlur);
@@ -841,10 +935,183 @@
     };
   }
 
+  // --- src/features/page-scroll.js ---
+  const PAGE_SCROLL_FEATURE_ID = 'page-scroll';
+
+  const OVERLAY_SELECTOR =
+    '[role="dialog"], [role="menu"], [role="listbox"], [aria-modal="true"], .cdk-overlay-container';
+  const SKIP_CONTROL_SELECTOR = 'button[data-gtm-feature="skip-to-previous-prompt"]';
+  const EDITABLE_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
+
+  function getElementNode(node) {
+    if (!node) return null;
+    if (typeof node.closest === 'function') return node;
+    return node.parentElement && typeof node.parentElement.closest === 'function'
+      ? node.parentElement
+      : null;
+  }
+
+  function isInsideOverlay(el) {
+    return Boolean(el && el.closest(OVERLAY_SELECTOR));
+  }
+
+  function isEditableOrFormControl(el) {
+    if (!el) return false;
+    if (EDITABLE_TAGS.has(el.tagName)) return true;
+    if (el.isContentEditable === true) return true;
+    if (typeof el.getAttribute === 'function') {
+      const ce = el.getAttribute('contenteditable');
+      if (ce === 'true' || ce === '') return true;
+      if (el.getAttribute('role') === 'textbox') return true;
+    }
+    return false;
+  }
+
+  function hasNestedVerticalScroller(el, chatScroller) {
+    let cur = el;
+    while (cur && cur !== chatScroller) {
+      if (
+        typeof cur.scrollHeight === 'number' &&
+        typeof cur.clientHeight === 'number' &&
+        cur.scrollHeight > cur.clientHeight + 1
+      ) {
+        const view = cur.ownerDocument?.defaultView;
+        let overflowY = null;
+        try {
+          overflowY = view?.getComputedStyle?.(cur)?.overflowY || null;
+        } catch {
+          overflowY = null;
+        }
+        if (overflowY === 'auto' || overflowY === 'scroll') {
+          return true;
+        }
+      }
+      cur = cur.parentElement;
+    }
+    return false;
+  }
+
+  function shouldHandlePageScroll(event, doc, scroller) {
+    if (!event || (event.key !== 'PageUp' && event.key !== 'PageDown')) {
+      return false;
+    }
+    if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.isComposing) {
+      return false;
+    }
+    if (!scroller) return false;
+    if (
+      typeof scroller.scrollHeight === 'number' &&
+      typeof scroller.clientHeight === 'number' &&
+      scroller.scrollHeight <= scroller.clientHeight
+    ) {
+      return false;
+    }
+
+    const activeEl = getElementNode(doc.activeElement);
+    const targetEl = getElementNode(event.target);
+
+    if (
+      activeEl?.closest(SKIP_CONTROL_SELECTOR) ||
+      targetEl?.closest(SKIP_CONTROL_SELECTOR)
+    ) {
+      return false;
+    }
+
+    if (isInsideOverlay(activeEl) || isInsideOverlay(targetEl)) {
+      return false;
+    }
+
+    if (isPromptInputElement(activeEl) || isPromptInputElement(targetEl)) {
+      return true;
+    }
+
+    if (isEditableOrFormControl(activeEl) || isEditableOrFormControl(targetEl)) {
+      return false;
+    }
+
+    if (
+      hasNestedVerticalScroller(activeEl, scroller) ||
+      hasNestedVerticalScroller(targetEl, scroller)
+    ) {
+      return false;
+    }
+
+    if (!activeEl || activeEl === doc.body || activeEl === doc.documentElement) {
+      return true;
+    }
+
+    return Boolean(activeEl.closest('chat-window') || activeEl === scroller);
+  }
+
+  function createPageScrollFeature({ doc = document } = {}) {
+    const view = doc.defaultView || null;
+    const keyTarget = view || doc;
+    const pageScroller = createSmoothPageScroller(createDocumentScrollerOptions(doc));
+
+    function handleKeyDown(event) {
+      const scroller = findChatScroller(doc);
+      if (!shouldHandlePageScroll(event, doc, scroller)) {
+        if (pageScroller.isActive()) {
+          const activeEl = getElementNode(doc.activeElement);
+          const targetEl = getElementNode(event?.target);
+          if (
+            activeEl?.closest(SKIP_CONTROL_SELECTOR) ||
+            targetEl?.closest(SKIP_CONTROL_SELECTOR)
+          ) {
+            pageScroller.stop();
+          }
+        }
+        return;
+      }
+
+      const direction = event.key === 'PageUp' ? -1 : 1;
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') {
+        event.stopImmediatePropagation();
+      }
+      if (!event.repeat || !pageScroller.isActive()) {
+        pageScroller.press(direction);
+      }
+    }
+
+    function handleKeyUp(event) {
+      if (event.key === 'PageUp') {
+        pageScroller.release(-1);
+      } else if (event.key === 'PageDown') {
+        pageScroller.release(1);
+      }
+    }
+
+    function handleWindowBlur() {
+      pageScroller.stop();
+    }
+
+    function init() {
+      keyTarget.addEventListener('keydown', handleKeyDown, true);
+      keyTarget.addEventListener('keyup', handleKeyUp, true);
+      keyTarget.addEventListener('blur', handleWindowBlur);
+    }
+
+    function destroy() {
+      pageScroller.stop();
+      keyTarget.removeEventListener('keydown', handleKeyDown, true);
+      keyTarget.removeEventListener('keyup', handleKeyUp, true);
+      keyTarget.removeEventListener('blur', handleWindowBlur);
+    }
+
+    return {
+      id: PAGE_SCROLL_FEATURE_ID,
+      init,
+      destroy,
+    };
+  }
+
   // --- src/main.js ---
   function bootstrapGeminiShortcuts(doc = document) {
     const features = [
       createSkipToPreviousPromptFeature({ doc, observe: true }),
+      createPageScrollFeature({ doc }),
     ];
 
     for (const feature of features) {
