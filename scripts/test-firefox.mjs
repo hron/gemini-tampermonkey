@@ -24,6 +24,54 @@ const server = http.createServer((req, res) => {
     res.end(harnessHtml);
     return;
   }
+  if (urlPath === '/zero-state') {
+    const zeroStateHtml = harnessHtml
+      .replace(
+        '<body class="theme-host dark-theme">',
+        `<style>
+          .center-input-layout input-container {
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            position: relative;
+            width: 100%;
+            min-height: 61px;
+            padding: 0 16px;
+          }
+          .center-input-layout .input-area-container {
+            display: flex;
+            flex-direction: column;
+            align-self: center;
+            width: 100%;
+            max-width: 660px;
+            position: relative;
+          }
+          .center-input-layout .input-area-container.is-zero-state:not(.is-mobile) {
+            position: absolute;
+            width: auto;
+            left: 28px;
+            right: 28px;
+            margin-inline: auto;
+            bottom: 50vh;
+            pointer-events: none;
+          }
+          .center-input-layout .input-area-container.is-zero-state > input-area-v2 {
+            pointer-events: auto;
+          }
+          .center-input-layout .text-input-field {
+            grid-template-columns: minmax(0, auto) 1fr auto;
+          }
+        </style>
+        <body class="theme-host dark-theme center-input-layout">`,
+      )
+      .replace(
+        '<div class="input-area-container">',
+        '<div class="input-area-container is-zero-state" style="--initial-input-half-height: 32px; position: absolute; bottom: 50vh; transform: translateY(calc(100% - 32px));">',
+      );
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(zeroStateHtml);
+    return;
+  }
   if (urlPath === '/csp') {
     const stripped = harnessHtml
       .replace('<script src="/dist/gemini-shortcuts.user.js"></script>', '')
@@ -193,6 +241,20 @@ async function verifyScenario(context, url, label) {
   assert.equal(initial.btnExists, true, `${label}: button must be mounted`);
   assert.equal(initial.btnOpacity, '0', `${label}: button must start hidden`);
   assert.ok(initial.maxScroll > 200, `${label}: scroller must overflow`);
+
+  // Verify anchor becomes positioned (relative) when unpositioned in CSS, keeping button aligned above it
+  const activeLayout = await evalJson(`(() => {
+    const anchor = document.querySelector('div.input-area-container');
+    const btn = document.querySelector('button[data-gtm-feature="skip-to-previous-prompt"]');
+    const aRect = anchor.getBoundingClientRect();
+    const bRect = btn.getBoundingClientRect();
+    return {
+      anchorPosition: getComputedStyle(anchor).position,
+      rightDelta: Math.abs(bRect.right - aRect.right),
+    };
+  })()`);
+  assert.equal(activeLayout.anchorPosition, 'relative', `${label}: unpositioned anchor falls back to position: relative`);
+  assert.ok(activeLayout.rightDelta <= 2, `${label}: skip button aligns with anchor right edge (delta=${activeLayout.rightDelta})`);
 
   // Click ql-editor
   const rect = await evalJson(`document.querySelector('.ql-editor').getBoundingClientRect()`);
@@ -370,12 +432,74 @@ async function verifyScenario(context, url, label) {
   console.log(`PASS: ${label}`);
 }
 
+async function verifyZeroStateLayout(context, url, label) {
+  await send('browsingContext.navigate', { context, url, wait: 'complete' });
+  await new Promise((r) => setTimeout(r, 350));
+
+  const r = await send('script.evaluate', {
+    expression: `JSON.stringify((() => {
+      const container = document.querySelector('input-container');
+      const anchor = document.querySelector('div.input-area-container');
+      const editor = document.querySelector('.ql-editor');
+      const btn = document.querySelector('button[data-gtm-feature="skip-to-previous-prompt"]');
+      const cRect = container.getBoundingClientRect();
+      const aRect = anchor.getBoundingClientRect();
+      const eRect = editor.getBoundingClientRect();
+      const bRect = btn ? btn.getBoundingClientRect() : null;
+      return {
+        anchorPosition: getComputedStyle(anchor).position,
+        anchorWidth: Math.round(aRect.width),
+        editorWidth: Math.round(eRect.width),
+        centerOffset: Math.abs((aRect.left + aRect.width / 2) - (cRect.left + cRect.width / 2)),
+        btnExists: Boolean(btn),
+        btnRightDelta: bRect ? Math.abs(bRect.right - aRect.right) : null,
+      };
+    })())`,
+    target: { context },
+    awaitPromise: true,
+  });
+  if (r.type === 'exception') {
+    throw new Error(`Exception in ${label}: ${JSON.stringify(r.exceptionDetails)}`);
+  }
+  const state = JSON.parse(r.result.value);
+
+  assert.equal(state.btnExists, true, `${label}: skip button must be mounted`);
+  assert.equal(
+    state.anchorPosition,
+    'absolute',
+    `${label}: zero-state input-area-container must preserve position: absolute`,
+  );
+  assert.ok(
+    state.anchorWidth >= 600,
+    `${label}: zero-state input pill must not collapse (got width=${state.anchorWidth}px)`,
+  );
+  assert.ok(
+    state.editorWidth >= 300,
+    `${label}: zero-state text editor must remain wide (got width=${state.editorWidth}px)`,
+  );
+  assert.ok(
+    state.centerOffset <= 2,
+    `${label}: zero-state input pill must remain centered (offset=${state.centerOffset}px)`,
+  );
+  assert.ok(
+    state.btnRightDelta <= 2,
+    `${label}: skip button must align with zero-state anchor right edge (delta=${state.btnRightDelta}px)`,
+  );
+
+  console.log(`PASS: ${label}`);
+}
+
 try {
   await send('session.new', { capabilities: {} });
   const tree = await send('browsingContext.getTree');
   const context = tree.contexts[0].context;
 
   await verifyScenario(context, `http://127.0.0.1:${httpPort}/`, 'Firefox Direct Page');
+  await verifyZeroStateLayout(
+    context,
+    `http://127.0.0.1:${httpPort}/zero-state`,
+    'Firefox Zero-State Initial Load Layout',
+  );
 
   await send('webExtension.install', { extensionData: { type: 'path', path: extDir } });
   await verifyScenario(

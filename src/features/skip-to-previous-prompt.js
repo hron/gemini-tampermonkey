@@ -24,8 +24,10 @@ export const SKIP_BUTTON_LABEL = 'Skip to previous prompt';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 const SKIP_BUTTON_STYLES = `
-.gtm-skip-anchor {
-  position: relative !important;
+/* Zero-specificity fallback so already-positioned anchors (e.g. Gemini's
+   position: absolute zero-state input container) are never overridden. */
+:where(.gtm-skip-anchor) {
+  position: relative;
 }
 
 .gtm-skip-prev-prompt {
