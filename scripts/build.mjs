@@ -14,6 +14,7 @@ const SOURCE_FILES = [
   'src/lib/dom.js',
   'src/features/skip-to-previous-prompt.js',
   'src/features/page-scroll.js',
+  'src/features/search-dialog.js',
   'src/main.js',
 ];
 

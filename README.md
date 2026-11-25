@@ -4,6 +4,15 @@ A modular Tampermonkey userscript that adds missing keyboard navigation and shor
 
 ## Features
 
+### Keyboard navigation for the `Ctrl+K` Search Chats dialog
+Turns Gemini's `Ctrl+K` (`Search chats`) dialog into a keyboard-first command palette without stealing focus from the search input:
+
+- The top matching chat is automatically highlighted as soon as the dialog opens or search results update.
+- **`ArrowUp`** / **`ArrowDown`** (and **`PageUp`** / **`PageDown`**): move selection through recent chats and search results while keeping the active item scrolled into view.
+- Keyboard focus stays strictly inside the search input so you can continue typing, editing, moving the text cursor (`ArrowLeft` / `ArrowRight`), or selecting text without interruption.
+- **`Enter`**: opens the currently highlighted chat immediately (while leaving `Clear search` / `Close` buttons working natively if tabbed to).
+- Mouse hover stays in sync with keyboard selection without stationary cursors stealing focus during scrolling, and infinite scroll preserves your current selection.
+
 ### Smooth `PageUp` / `PageDown` scrolling while input is focused
 Scroll the Gemini conversation smoothly without leaving the prompt input:
 

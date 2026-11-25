@@ -429,6 +429,124 @@ async function verifyScenario(context, url, label) {
   assert.equal(after2ShiftTab.activeAria, 'Upload & tools', `${label}: 2nd Shift+Tab moves to Upload & tools`);
   assert.equal(after2ShiftTab.btnOpacity, '0', `${label}: pill hides after 2nd Shift+Tab`);
 
+  // --- Ctrl+K Search Chats Dialog E2E ---
+  const pressCtrl = async (key, waitMs = 200) => {
+    await send('input.performActions', {
+      context,
+      actions: [
+        {
+          type: 'key',
+          id: 'kbd',
+          actions: [
+            { type: 'keyDown', value: '\uE009' },
+            { type: 'keyDown', value: key },
+            { type: 'keyUp', value: key },
+            { type: 'keyUp', value: '\uE009' },
+          ],
+        },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, waitMs));
+  };
+
+  const typeText = async (text, waitMs = 150) => {
+    const actions = [];
+    for (const ch of text) {
+      actions.push({ type: 'keyDown', value: ch });
+      actions.push({ type: 'keyUp', value: ch });
+    }
+    await send('input.performActions', { context, actions: [{ type: 'key', id: 'kbd', actions }] });
+    await new Promise((r) => setTimeout(r, waitMs));
+  };
+
+  const getSearchState = () =>
+    evalJson(`(() => {
+      const dialog = document.querySelector('[role="dialog"][aria-label="Search chats"]');
+      const input = dialog ? dialog.querySelector('input[type="search"]') : null;
+      const viewport = dialog ? dialog.querySelector('[data-id$="-viewport"]') : null;
+      const links = dialog ? Array.from(dialog.querySelectorAll('ul li a[href]')) : [];
+      const activeIdx = links.findIndex((a) => a.getAttribute('data-gtm-search-active') === 'true');
+      const activeEl = activeIdx >= 0 ? links[activeIdx] : null;
+      const vRect = viewport ? viewport.getBoundingClientRect() : null;
+      const aRect = activeEl ? activeEl.getBoundingClientRect() : null;
+      const scroller = document.querySelector('infinite-scroller[data-test-id="chat-history-container"]');
+      return {
+        dialogOpen: Boolean(dialog),
+        inputFocused: Boolean(input && document.activeElement === input),
+        inputValue: input ? input.value : null,
+        selectionStart: input ? input.selectionStart : null,
+        ariaActiveDescendant: input ? input.getAttribute('aria-activedescendant') : null,
+        optionCount: links.length,
+        activeIdx,
+        activeId: activeEl ? activeEl.id : null,
+        activeHref: activeEl ? activeEl.getAttribute('href') : null,
+        activeBg: activeEl ? getComputedStyle(activeEl).backgroundColor : null,
+        inactiveBg: links.find((_, i) => i !== activeIdx)
+          ? getComputedStyle(links.find((_, i) => i !== activeIdx)).backgroundColor
+          : null,
+        viewportScrollTop: viewport ? Math.round(viewport.scrollTop) : 0,
+        activeInViewport: Boolean(vRect && aRect && aRect.top >= vRect.top - 2 && aRect.bottom <= vRect.bottom + 2),
+        chatScrollTop: Math.round(scroller.scrollTop),
+        lastOpenedChatHref: window.__lastOpenedChatHref || null,
+      };
+    })()`);
+
+  // Open Ctrl+K dialog
+  await pressCtrl('k', 200);
+  const searchOpen = await getSearchState();
+  assert.equal(searchOpen.dialogOpen, true, `${label}: Ctrl+K opens search dialog`);
+  assert.equal(searchOpen.inputFocused, true, `${label}: search input is focused on open`);
+  assert.equal(searchOpen.activeIdx, 0, `${label}: first option auto-highlighted on open`);
+  assert.equal(searchOpen.ariaActiveDescendant, searchOpen.activeId, `${label}: aria-activedescendant synced`);
+  assert.notEqual(searchOpen.activeBg, searchOpen.inactiveBg, `${label}: active option has distinct highlight style`);
+
+  // ArrowDown x8 navigates down, scrolls viewport, keeps focus in search input
+  for (let i = 0; i < 8; i += 1) {
+    await press('\uE015', false, 60);
+  }
+  const afterSearchDown = await getSearchState();
+  assert.equal(afterSearchDown.activeIdx, 8, `${label}: ArrowDown x8 selects index 8`);
+  assert.equal(afterSearchDown.inputFocused, true, `${label}: search input keeps focus after ArrowDown`);
+  assert.ok(afterSearchDown.viewportScrollTop > 0, `${label}: viewport scrolled to show index 8`);
+  assert.equal(afterSearchDown.activeInViewport, true, `${label}: active option remains visible in viewport`);
+
+  // PageUp inside dialog moves dialog selection without scrolling background chat
+  const chatScrollBeforeDialogPgUp = afterSearchDown.chatScrollTop;
+  await press('\uE00E', false, 100);
+  const afterDialogPgUp = await getSearchState();
+  assert.ok(afterDialogPgUp.activeIdx < 8, `${label}: PageUp moves dialog selection up`);
+  assert.equal(afterDialogPgUp.inputFocused, true, `${label}: search input keeps focus after PageUp`);
+  assert.equal(afterDialogPgUp.chatScrollTop, chatScrollBeforeDialogPgUp, `${label}: PageUp in dialog does not scroll background chat`);
+
+  // Type directly without re-focusing -> filters results and auto-selects index 0
+  await typeText('orbit', 150);
+  const afterTyping = await getSearchState();
+  assert.equal(afterTyping.inputFocused, true, `${label}: search input stays focused while typing`);
+  assert.equal(afterTyping.inputValue, 'orbit', `${label}: typing updates search input value`);
+  assert.equal(afterTyping.optionCount, 4, `${label}: filtered results count matches`);
+  assert.equal(afterTyping.activeIdx, 0, `${label}: typing resets selection to top match`);
+
+  // Move caret left twice, press ArrowDown to select 2nd match, verify caret did NOT jump and editing continues seamlessly
+  await press('\uE012', false, 50); // ArrowLeft
+  await press('\uE012', false, 50); // ArrowLeft -> caret at index 3 ("orb|it")
+  await press('\uE015', false, 80); // ArrowDown -> selects index 1
+  const afterMidEditArrow = await getSearchState();
+  assert.equal(afterMidEditArrow.activeIdx, 1, `${label}: ArrowDown selects 2nd filtered match`);
+  assert.equal(afterMidEditArrow.inputFocused, true, `${label}: focus stays in input`);
+  assert.equal(afterMidEditArrow.selectionStart, 3, `${label}: ArrowDown must not move text caret`);
+
+  // Press Enter -> activates the selected filtered chat (/app/chat-3) and closes dialog
+  await press('\uE006', false, 150);
+  const afterSearchEnter = await getSearchState();
+  assert.equal(afterSearchEnter.dialogOpen, false, `${label}: Enter activates option and closes dialog`);
+  assert.equal(afterSearchEnter.lastOpenedChatHref, '/app/chat-3', `${label}: Enter opened the highlighted chat`);
+
+  // Re-open with Ctrl+K and close with Escape
+  await pressCtrl('k', 150);
+  assert.equal((await getSearchState()).dialogOpen, true, `${label}: Ctrl+K re-opens search dialog`);
+  await press('\uE00C', false, 150);
+  assert.equal((await getSearchState()).dialogOpen, false, `${label}: Escape closes search dialog`);
+
   console.log(`PASS: ${label}`);
 }
 

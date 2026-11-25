@@ -1,10 +1,12 @@
 import { createPageScrollFeature } from './features/page-scroll.js';
+import { createSearchDialogFeature } from './features/search-dialog.js';
 import { createSkipToPreviousPromptFeature } from './features/skip-to-previous-prompt.js';
 
 export function bootstrapGeminiShortcuts(doc = document) {
   const features = [
     createSkipToPreviousPromptFeature({ doc, observe: true }),
     createPageScrollFeature({ doc }),
+    createSearchDialogFeature({ doc, observe: true }),
   ];
 
   for (const feature of features) {

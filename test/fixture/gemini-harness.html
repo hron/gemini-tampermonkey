@@ -188,6 +188,110 @@
       content: attr(data-placeholder);
       color: var(--gem-sys-color--on-surface-variant);
     }
+
+    /* Gemini Ctrl+K Search Chats modal (mirrors live Base UI portal DOM) */
+    .harness-search-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 3000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.55);
+    }
+
+    .harness-search-dialog {
+      width: min(660px, calc(100vw - 32px));
+      height: min(420px, calc(100vh - 80px));
+      border-radius: 24px;
+      background: var(--lumi-sys-color--surface-bright);
+      color: var(--gem-sys-color--on-surface);
+      box-shadow: var(--lumi-sys-elevation--level2);
+      border: 1px solid var(--gem-sys-color--outline-low);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .harness-search-section {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .harness-search-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--gem-sys-color--outline-low);
+    }
+
+    .harness-search-input {
+      flex: 1;
+      min-width: 0;
+      height: 36px;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--gem-sys-color--on-surface);
+      font-size: 16px;
+    }
+
+    .harness-search-bar button {
+      border: none;
+      background: transparent;
+      color: var(--gem-sys-color--on-surface-variant);
+      cursor: pointer;
+      padding: 6px 10px;
+      border-radius: 9999px;
+      font-size: 13px;
+    }
+
+    .harness-search-results {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      padding: 0 12px 12px;
+    }
+
+    .harness-search-results h2 {
+      margin: 0;
+      padding: 12px 12px 8px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--gem-sys-color--on-surface-variant);
+    }
+
+    .harness-search-viewport {
+      flex: 1;
+      min-height: 0;
+      overflow-y: scroll;
+    }
+
+    .harness-search-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .harness-search-list li a {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 48px;
+      padding: 0 16px;
+      border-radius: 9999px;
+      color: var(--gem-sys-color--on-surface);
+      text-decoration: none;
+      font-size: 14px;
+    }
+
+    .harness-search-list li a:hover {
+      background: rgba(230, 230, 230, 0.08);
+    }
   </style>
 </head>
 <body class="theme-host dark-theme">
@@ -196,6 +300,7 @@
     <span>scrollTop: <strong id="hud-scroll">0</strong>/<span id="hud-max">0</span></span>
     <span>skipOpacity: <strong id="hud-opacity">n/a</strong></span>
     <span>lastKey: <strong id="hud-key">none</strong></span>
+    <button type="button" id="open-search" tabindex="-1">Search (Ctrl+K)</button>
     <button type="button" id="toggle-theme" tabindex="-1">Toggle Theme</button>
   </div>
 
@@ -314,6 +419,169 @@
     document.getElementById('toggle-theme').addEventListener('click', () => {
       document.body.classList.toggle('dark-theme');
       document.body.classList.toggle('light-theme');
+    });
+
+    // Mock Gemini Ctrl+K "Search chats" Base UI portal dialog
+    const MOCK_CHATS = [
+      { id: 'chat-1', title: 'Orbital mechanics overview', date: 'Today' },
+      { id: 'chat-2', title: 'Rust async runtime comparison', date: 'Today' },
+      { id: 'chat-3', title: 'Orbital transfer Hohmann math', date: 'Yesterday' },
+      { id: 'chat-4', title: 'Firefox WebExtension CSP notes', date: 'Yesterday' },
+      { id: 'chat-5', title: 'Orbital resonance in Jupiter moons', date: 'Nov 22' },
+      { id: 'chat-6', title: 'TypeScript generic inference tips', date: 'Nov 21' },
+      { id: 'chat-7', title: 'Linux systemd user timers', date: 'Nov 20' },
+      { id: 'chat-8', title: 'PostgreSQL index scan tuning', date: 'Nov 19' },
+      { id: 'chat-9', title: 'Sourdough hydration ratios', date: 'Nov 18' },
+      { id: 'chat-10', title: 'CSS color-mix theming guide', date: 'Nov 17' },
+      { id: 'chat-11', title: 'Neovim LSP configuration', date: 'Nov 16' },
+      { id: 'chat-12', title: 'Orbital mechanics deep dive', date: 'Nov 15' },
+    ];
+
+    window.__lastOpenedChatHref = null;
+    let searchPortalEl = null;
+
+    function closeSearchDialog() {
+      if (searchPortalEl) {
+        searchPortalEl.remove();
+        searchPortalEl = null;
+      }
+    }
+
+    function openSearchDialog() {
+      if (searchPortalEl) {
+        closeSearchDialog();
+        return;
+      }
+
+      const portal = document.createElement('div');
+      portal.setAttribute('data-base-ui-portal', '');
+
+      const backdrop = document.createElement('div');
+      backdrop.setAttribute('role', 'presentation');
+      backdrop.setAttribute('data-open', '');
+      backdrop.className = 'harness-search-backdrop';
+
+      const dialog = document.createElement('div');
+      dialog.setAttribute('role', 'dialog');
+      dialog.setAttribute('aria-modal', 'true');
+      dialog.setAttribute('aria-label', 'Search chats');
+      dialog.setAttribute('tabindex', '-1');
+      dialog.setAttribute('data-open', '');
+      dialog.className = 'harness-search-dialog';
+
+      const searchSection = document.createElement('section');
+      searchSection.setAttribute('role', 'search');
+      searchSection.setAttribute('aria-label', 'Search chats');
+      searchSection.className = 'harness-search-section';
+
+      const topBar = document.createElement('div');
+      topBar.className = 'harness-search-bar';
+
+      const input = document.createElement('input');
+      input.type = 'search';
+      input.setAttribute('aria-label', 'Search chats');
+      input.setAttribute('placeholder', 'Search chats');
+      input.setAttribute('autocomplete', 'off');
+      input.className = 'harness-search-input';
+
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.setAttribute('aria-label', 'Clear search');
+      clearBtn.textContent = 'Clear';
+      clearBtn.hidden = true;
+
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.setAttribute('aria-label', 'Close');
+      closeBtn.textContent = '✕';
+
+      topBar.appendChild(input);
+      topBar.appendChild(clearBtn);
+      topBar.appendChild(closeBtn);
+
+      const resultsSection = document.createElement('section');
+      resultsSection.className = 'harness-search-results';
+
+      const heading = document.createElement('h2');
+      heading.textContent = 'Recents';
+
+      const viewport = document.createElement('div');
+      viewport.setAttribute('data-id', 'base-ui-harness-viewport');
+      viewport.setAttribute('tabindex', '0');
+      viewport.className = 'base-ui-disable-scrollbar harness-search-viewport';
+
+      const ul = document.createElement('ul');
+      ul.className = 'harness-search-list';
+
+      function renderChats(query) {
+        const q = (query || '').trim().toLowerCase();
+        heading.textContent = q ? 'Search results' : 'Recents';
+        clearBtn.hidden = !query;
+        ul.textContent = '';
+
+        const filtered = q
+          ? MOCK_CHATS.filter((chat) => chat.title.toLowerCase().includes(q))
+          : MOCK_CHATS;
+
+        for (const chat of filtered) {
+          const li = document.createElement('li');
+          const a = document.createElement('a');
+          a.setAttribute('href', `/app/${chat.id}`);
+          const titleSpan = document.createElement('span');
+          titleSpan.textContent = chat.title;
+          const dateSpan = document.createElement('span');
+          dateSpan.textContent = chat.date;
+          a.appendChild(titleSpan);
+          a.appendChild(dateSpan);
+          a.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            window.__lastOpenedChatHref = a.getAttribute('href');
+            closeSearchDialog();
+          });
+          li.appendChild(a);
+          ul.appendChild(li);
+        }
+
+        // Empty infinite-scroll sentinel matching live Gemini DOM
+        ul.appendChild(document.createElement('li'));
+      }
+
+      renderChats('');
+
+      input.addEventListener('input', () => renderChats(input.value));
+      clearBtn.addEventListener('click', () => {
+        input.value = '';
+        renderChats('');
+        input.focus();
+      });
+      closeBtn.addEventListener('click', closeSearchDialog);
+      backdrop.addEventListener('click', (ev) => {
+        if (ev.target === backdrop) closeSearchDialog();
+      });
+
+      viewport.appendChild(ul);
+      resultsSection.appendChild(heading);
+      resultsSection.appendChild(viewport);
+      searchSection.appendChild(topBar);
+      searchSection.appendChild(resultsSection);
+      dialog.appendChild(searchSection);
+      backdrop.appendChild(dialog);
+      portal.appendChild(backdrop);
+      document.body.appendChild(portal);
+
+      searchPortalEl = portal;
+      input.focus();
+    }
+
+    document.getElementById('open-search').addEventListener('click', openSearchDialog);
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        openSearchDialog();
+      } else if (e.key === 'Escape' && searchPortalEl) {
+        e.preventDefault();
+        closeSearchDialog();
+      }
     });
   </script>
 
