@@ -1,7 +1,16 @@
 {
   "name": "gemini-tampermonkey",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Tampermonkey userscript adding missing keyboard shortcuts to gemini.google.com",
+  "author": "Aleksei Gusev",
+  "homepage": "https://github.com/hron/gemini-tampermonkey#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hron/gemini-tampermonkey.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hron/gemini-tampermonkey/issues"
+  },
   "type": "module",
   "private": true,
   "scripts": {
