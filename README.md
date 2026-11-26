@@ -66,29 +66,16 @@ npm run dev
 2. Open Tampermonkey Dashboard → **Create a new script**.
 3. Paste the contents of `dist/gemini-shortcuts.user.js` and save.
 
-### Option 3: Live local development via `@require`
-> **Note for Firefox users:** Firefox blocks WebExtensions (including Tampermonkey) from loading `file://` URLs. Use the local HTTP dev server (`npm run dev`) instead of `file://` in Firefox!
+### Option 3: Live local development (Firefox & Chromium, no caching)
+Tampermonkey caches `@require` scripts internally and does not refetch them on page reload. Instead, `npm run dev` serves a separate **`(Local Dev)`** loader userscript that fetches a freshly rebuilt bundle from `127.0.0.1:4173` on every page load via `GM_xmlhttpRequest` (so edits take effect immediately on `F5`, and you can keep your stable script installed and simply toggle between them in Tampermonkey):
 
-- **Firefox & Chromium (works everywhere):**
-  1. Run `npm run dev` (serves `http://127.0.0.1:4173/dist/gemini-shortcuts.user.js` with `Cache-Control: no-store`).
-  2. Create a thin loader script in Tampermonkey:
-```js
-// ==UserScript==
-// @name         Gemini Keyboard Shortcuts (Local Dev)
-// @match        https://gemini.google.com/*
-// @grant        GM_addStyle
-// @run-at       document-idle
-// @description  Keyboard shortcuts for Gemini
-// @icon         https://www.google.com/s2/favicons?sz=64&domain=gemini.google.com
-// @require      http://127.0.0.1:4173/dist/gemini-shortcuts.user.js
-// ==/UserScript==
-```
-  3. In Tampermonkey Settings → **Externals**, set **Update Interval** to `Always` (or bump a query param like `?v=2`) if you want reloads to pick up rebuilt changes immediately.
-
-- **Brave / Chrome only (`file://`):**
-  1. Enable **Allow access to file URLs** in Tampermonkey's extension settings.
-  2. Use `@require file:///path/to/gemini-tampermonkey/dist/gemini-shortcuts.user.js`.
-  3. Run `npm run build` after changes and reload `gemini.google.com`.
+1. Start the dev server (rebuilds from `src/` automatically on every request):
+   ```bash
+   npm run dev
+   ```
+2. Open **`http://127.0.0.1:4173/dev-loader.user.js`** in your browser and click **Install** in Tampermonkey.
+3. In the Tampermonkey Dashboard, disable the stable **Gemini Keyboard Shortcuts** script and enable **Gemini Keyboard Shortcuts (Local Dev)** while testing.
+4. Edit files in `src/` and reload `gemini.google.com` — DevTools Console logs `[GTM Dev] Loaded fresh build (<hash>, <bytes>B)` on each reload (or warns if `npm run dev` isn't running).
 
 ## Releasing
 

@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 
+import { createDevLoaderScript, createDevServer } from '../scripts/dev-server.mjs';
+
 const ROOT_DIR = path.resolve(import.meta.dirname, '..');
 const DIST_PATH = path.join(ROOT_DIR, 'dist/gemini-shortcuts.user.js');
 const META_PATH = path.join(ROOT_DIR, 'dist/gemini-shortcuts.meta.js');
@@ -61,5 +63,41 @@ describe('built userscript artifact', () => {
     assert.ok(headerMatch, 'userscript must contain metadata header block');
     assert.equal(metaSource, `${headerMatch[0]}\n`);
     assert.doesNotMatch(metaSource, /\(function\s*\(\)/);
+  });
+
+  it('generates a valid live-reload Tampermonkey dev loader using GM_xmlhttpRequest', () => {
+    const loader = createDevLoaderScript({ port: 4173 });
+    assert.match(loader, /\/\/ @name\s+Gemini Keyboard Shortcuts \(Local Dev\)$/m);
+    assert.match(loader, /\/\/ @namespace\s+https:\/\/github\.com\/hron\/gemini-tampermonkey#dev$/m);
+    assert.match(loader, /\/\/ @match\s+https:\/\/gemini\.google\.com\/\*$/m);
+    assert.match(loader, /\/\/ @grant\s+GM_addStyle$/m);
+    assert.match(loader, /\/\/ @grant\s+GM_xmlhttpRequest$/m);
+    assert.match(loader, /\/\/ @connect\s+127\.0\.0\.1$/m);
+    assert.match(loader, /\/\/ @connect\s+localhost$/m);
+    assert.doesNotMatch(loader, /\/\/ @require\s/m, 'must not use cached @require');
+    assert.doesNotThrow(() => new vm.Script(loader, { filename: 'dev-loader.user.js' }));
+  });
+
+  it('serves the dev loader and freshly rebuilt userscript bundle with no-cache headers', async () => {
+    const server = createDevServer();
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    try {
+      const loaderRes = await fetch(`http://127.0.0.1:${port}/dev-loader.user.js`);
+      assert.equal(loaderRes.status, 200);
+      assert.match(loaderRes.headers.get('cache-control') || '', /no-store/);
+      const loaderText = await loaderRes.text();
+      assert.match(loaderText, new RegExp(`http://127\\.0\\.0\\.1:${port}/dist/gemini-shortcuts\\.user\\.js`));
+
+      const bundleRes = await fetch(`http://127.0.0.1:${port}/dist/gemini-shortcuts.user.js?t=123`);
+      assert.equal(bundleRes.status, 200);
+      assert.match(bundleRes.headers.get('cache-control') || '', /no-store/);
+      assert.match(bundleRes.headers.get('x-gtm-build-hash') || '', /^[0-9a-f]{8}$/);
+      const bundleText = await bundleRes.text();
+      assert.match(bundleText, /\/\/ ==UserScript==/);
+      assert.doesNotThrow(() => new vm.Script(bundleText, { filename: 'gemini-shortcuts.user.js' }));
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });
