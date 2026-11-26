@@ -747,7 +747,7 @@
     }
 
     document.addEventListener('keydown', (e) => {
-      hudKey.textContent = `${e.shiftKey ? 'Shift+' : ''}${e.key}`;
+      hudKey.textContent = `${e.ctrlKey ? 'Ctrl+' : ''}${e.altKey ? 'Alt+' : ''}${e.shiftKey ? 'Shift+' : ''}${e.key}`;
       setTimeout(updateHud, 20);
     }, true);
     document.addEventListener('focusin', () => setTimeout(updateHud, 10));

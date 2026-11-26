@@ -276,6 +276,27 @@ async function verifyScenario(context, url, label) {
     await new Promise((r) => setTimeout(r, waitMs));
   };
 
+  const pressCtrlAlt = async (key, waitMs = 500) => {
+    await send('input.performActions', {
+      context,
+      actions: [
+        {
+          type: 'key',
+          id: 'kbd',
+          actions: [
+            { type: 'keyDown', value: '\uE009' },
+            { type: 'keyDown', value: '\uE00A' },
+            { type: 'keyDown', value: key },
+            { type: 'keyUp', value: key },
+            { type: 'keyUp', value: '\uE00A' },
+            { type: 'keyUp', value: '\uE009' },
+          ],
+        },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, waitMs));
+  };
+
   const initial = await getState();
   assert.equal(initial.btnExists, true, `${label}: button must be mounted`);
   assert.equal(initial.btnOpacity, '0', `${label}: button must start hidden`);
@@ -379,6 +400,51 @@ async function verifyScenario(context, url, label) {
     `${label}: holding PageDown while input focused smoothly scrolls back down (${afterDoublePageUp.scrollTop} -> ${afterHoldInputPageDown.scrollTop})`,
   );
 
+  // Ctrl+Alt+[ and Ctrl+Alt+] navigate between prompts while keeping focus in prompt input
+  await evalJson(`(() => {
+    const scroller = document.querySelector('infinite-scroller[data-test-id="chat-history-container"]');
+    scroller.scrollTop = scroller.scrollHeight;
+    return true;
+  })()`);
+  const beforeInputPromptNav = await getState();
+  await pressCtrlAlt('[', 550);
+  const afterCtrlAltPrev1 = await getState();
+  assert.equal(afterCtrlAltPrev1.activeAria, 'Enter a prompt for Gemini', `${label}: input stays focused on Ctrl+Alt+[ (1)`);
+  assert.ok(
+    afterCtrlAltPrev1.scrollTop < beforeInputPromptNav.scrollTop - 200,
+    `${label}: 1st Ctrl+Alt+[ skips to Prompt 2 (${beforeInputPromptNav.scrollTop} -> ${afterCtrlAltPrev1.scrollTop})`,
+  );
+
+  await pressCtrlAlt('[', 550);
+  const afterCtrlAltPrev2 = await getState();
+  assert.equal(afterCtrlAltPrev2.activeAria, 'Enter a prompt for Gemini', `${label}: input stays focused on Ctrl+Alt+[ (2)`);
+  assert.ok(
+    afterCtrlAltPrev2.scrollTop < afterCtrlAltPrev1.scrollTop - 100,
+    `${label}: 2nd Ctrl+Alt+[ skips to Prompt 1 (${afterCtrlAltPrev1.scrollTop} -> ${afterCtrlAltPrev2.scrollTop})`,
+  );
+
+  await pressCtrlAlt(']', 550);
+  const afterCtrlAltNext1 = await getState();
+  assert.equal(afterCtrlAltNext1.activeAria, 'Enter a prompt for Gemini', `${label}: input stays focused on Ctrl+Alt+] (1)`);
+  assert.ok(
+    Math.abs(afterCtrlAltNext1.scrollTop - afterCtrlAltPrev1.scrollTop) <= 12,
+    `${label}: Ctrl+Alt+] scrolls forward to Prompt 2 (expected ~${afterCtrlAltPrev1.scrollTop}, got ${afterCtrlAltNext1.scrollTop})`,
+  );
+
+  await pressCtrlAlt(']', 300);
+  const afterCtrlAltNextEnd = await getState();
+  assert.ok(
+    Math.abs(afterCtrlAltNextEnd.scrollTop - afterCtrlAltNext1.scrollTop) <= 4,
+    `${label}: Ctrl+Alt+] at last prompt stays at last prompt (${afterCtrlAltNext1.scrollTop} -> ${afterCtrlAltNextEnd.scrollTop})`,
+  );
+
+  // Restore scroll to bottom for Skip button tests
+  await evalJson(`(() => {
+    const scroller = document.querySelector('infinite-scroller[data-test-id="chat-history-container"]');
+    scroller.scrollTop = scroller.scrollHeight;
+    return true;
+  })()`);
+
   // Shift+Tab -> focuses and reveals skip button
   await press('\uE004', true, 250);
   const afterShiftTab = await getState();
@@ -447,6 +513,30 @@ async function verifyScenario(context, url, label) {
   await press('\uE006', false, 500);
   const afterEnter2 = await getState();
   assert.ok(afterEnter2.scrollTop < afterEnter1.scrollTop - 100, `${label}: 2nd Enter skips to Prompt 1`);
+
+  // Shift+ArrowDown / Shift+ArrowUp while Skip button is focused -> jump to next / previous prompt
+  await press('\uE015', true, 550);
+  const afterShiftDown1 = await getState();
+  assert.equal(afterShiftDown1.activeFeature, 'skip-to-previous-prompt', `${label}: Shift+ArrowDown keeps focus on skip button`);
+  assert.ok(
+    Math.abs(afterShiftDown1.scrollTop - afterEnter1.scrollTop) <= 12,
+    `${label}: Shift+ArrowDown jumps to Prompt 2 (expected ~${afterEnter1.scrollTop}, got ${afterShiftDown1.scrollTop})`,
+  );
+
+  await press('\uE015', true, 300);
+  const afterShiftDownEnd = await getState();
+  assert.ok(
+    Math.abs(afterShiftDownEnd.scrollTop - afterShiftDown1.scrollTop) <= 4,
+    `${label}: Shift+ArrowDown at last prompt stays at last prompt (${afterShiftDown1.scrollTop} -> ${afterShiftDownEnd.scrollTop})`,
+  );
+
+  await press('\uE013', true, 550);
+  const afterShiftUp1 = await getState();
+  assert.equal(afterShiftUp1.activeFeature, 'skip-to-previous-prompt', `${label}: Shift+ArrowUp keeps focus on skip button`);
+  assert.ok(
+    Math.abs(afterShiftUp1.scrollTop - afterEnter2.scrollTop) <= 12,
+    `${label}: Shift+ArrowUp jumps back to Prompt 1 (expected ~${afterEnter2.scrollTop}, got ${afterShiftUp1.scrollTop})`,
+  );
 
   // Tab -> returns to ql-editor and hides pill
   await press('\uE004', false, 250);

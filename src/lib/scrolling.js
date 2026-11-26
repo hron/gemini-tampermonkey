@@ -124,6 +124,31 @@ export function findPreviousPromptScrollTop(
   return Math.max(0, Math.round(promptOffsets[0] - paddingPx));
 }
 
+/**
+ * Given sorted prompt top offsets (in scroller content coordinates) and the
+ * current scrollTop, returns the scrollTop target for the next prompt
+ * below the current viewport top, or null if there is no later prompt.
+ */
+export function findNextPromptScrollTop(
+  promptOffsets,
+  currentScrollTop,
+  { paddingPx = PROMPT_SCROLL_PADDING_PX, tolerancePx = PROMPT_SCROLL_TOLERANCE_PX } = {},
+) {
+  if (!Array.isArray(promptOffsets) || promptOffsets.length === 0) {
+    return null;
+  }
+
+  const threshold = currentScrollTop + tolerancePx;
+  for (let i = 0; i < promptOffsets.length; i += 1) {
+    const targetTop = Math.max(0, Math.round(promptOffsets[i] - paddingPx));
+    if (targetTop > threshold) {
+      return targetTop;
+    }
+  }
+
+  return null;
+}
+
 function setScrollTopInstant(scroller, top) {
   if (typeof scroller.scrollTo === 'function') {
     try {

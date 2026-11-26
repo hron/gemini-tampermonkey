@@ -7,6 +7,7 @@ import {
   computePageStep,
   computeScrollAction,
   findPreviousPromptScrollTop,
+  findNextPromptScrollTop,
   applyScrollAction,
   createSmoothArrowScroller,
   createSmoothPageScroller,
@@ -152,6 +153,36 @@ describe('findPreviousPromptScrollTop', () => {
     const promptOffsets = [10, 600];
     assert.equal(findPreviousPromptScrollTop(promptOffsets, 0), 0);
     assert.equal(findPreviousPromptScrollTop(promptOffsets, 12), 0);
+  });
+});
+
+describe('findNextPromptScrollTop', () => {
+  it('returns null when there are no prompts', () => {
+    assert.equal(findNextPromptScrollTop([], 0), null);
+  });
+
+  it('jumps to the nearest prompt below current scrollTop', () => {
+    const promptOffsets = [20, 600, 1400];
+    // At top (0) -> Prompt 1 target is 4 (within tolerance of 0), so jumps to Prompt 2 (584)
+    assert.equal(findNextPromptScrollTop(promptOffsets, 0), 584);
+    // At Prompt 1 (4) -> jumps to Prompt 2 (584)
+    assert.equal(findNextPromptScrollTop(promptOffsets, 4), 584);
+    // Midway through response 1 (300) -> jumps to Prompt 2 (584)
+    assert.equal(findNextPromptScrollTop(promptOffsets, 300), 584);
+    // At Prompt 2 (584) -> jumps to Prompt 3 (1384)
+    assert.equal(findNextPromptScrollTop(promptOffsets, 584), 1384);
+  });
+
+  it('jumps to the first prompt if scrolled well above it', () => {
+    const promptOffsets = [200, 800];
+    assert.equal(findNextPromptScrollTop(promptOffsets, 0), 184);
+    assert.equal(findNextPromptScrollTop(promptOffsets, 184), 784);
+  });
+
+  it('returns null when already at or past the last prompt', () => {
+    const promptOffsets = [20, 600, 1400];
+    assert.equal(findNextPromptScrollTop(promptOffsets, 1384), null);
+    assert.equal(findNextPromptScrollTop(promptOffsets, 1800), null);
   });
 });
 

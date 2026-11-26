@@ -503,4 +503,223 @@ describe('skip-to-previous-prompt feature', () => {
 
     feature.destroy();
   });
+
+  it('scrolls to previous and next prompts on Shift+ArrowUp and Shift+ArrowDown while Skip button is focused', () => {
+    const env = createFakeGeminiEnv({ promptTops: [100, 700, 1400], initialScrollTop: 1600 });
+    const feature = createSkipToPreviousPromptFeature({ doc: env.doc, observe: false });
+    feature.init();
+
+    const btn = env.doc.querySelector(SKIP_BUTTON_SELECTOR);
+    env.doc.activeElement = btn;
+
+    // Shift+ArrowUp -> Prompt 3 (1384), then Prompt 2 (684), then Prompt 1 (84)
+    const up1 = createFakeEvent('keydown', { key: 'ArrowUp', shiftKey: true, target: btn });
+    btn.dispatchEvent(up1);
+    assert.equal(up1.defaultPrevented, true);
+    assert.equal(up1.propagationStopped, true);
+    assert.equal(env.scroller.scrollTop, 1384);
+
+    const up2 = createFakeEvent('keydown', { key: 'ArrowUp', shiftKey: true, target: btn });
+    btn.dispatchEvent(up2);
+    assert.equal(up2.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 684);
+
+    const up3 = createFakeEvent('keydown', { key: 'ArrowUp', shiftKey: true, target: btn });
+    btn.dispatchEvent(up3);
+    assert.equal(up3.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 84);
+
+    // Shift+ArrowDown -> Prompt 2 (684), then Prompt 3 (1384)
+    const down1 = createFakeEvent('keydown', { key: 'ArrowDown', shiftKey: true, target: btn });
+    btn.dispatchEvent(down1);
+    assert.equal(down1.defaultPrevented, true);
+    assert.equal(down1.propagationStopped, true);
+    assert.equal(env.scroller.scrollTop, 684);
+
+    const down2 = createFakeEvent('keydown', { key: 'ArrowDown', shiftKey: true, target: btn });
+    btn.dispatchEvent(down2);
+    assert.equal(down2.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 1384);
+
+    // Shift+ArrowDown at the last prompt stays at last prompt and still prevents default
+    const downAtEnd = createFakeEvent('keydown', { key: 'ArrowDown', shiftKey: true, target: btn });
+    btn.dispatchEvent(downAtEnd);
+    assert.equal(downAtEnd.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 1384);
+
+    // Focus remains on Skip button throughout
+    assert.equal(env.doc.activeElement, btn);
+    assert.equal(
+      env.scroller.scrollCalls.every((c) => c.method === 'scrollTo' && c.behavior === 'smooth'),
+      true,
+      'Shift+ArrowUp/Down should use smooth scrollTo, not incremental arrow scrollBy',
+    );
+
+    feature.destroy();
+  });
+
+  it('scrolls between prompts on Ctrl+Alt+[ and Ctrl+Alt+] while prompt input is focused without moving focus', () => {
+    const env = createFakeGeminiEnv({ promptTops: [100, 700, 1400], initialScrollTop: 1600 });
+    const feature = createSkipToPreviousPromptFeature({ doc: env.doc, observe: false });
+    feature.init();
+
+    env.doc.activeElement = env.input;
+
+    // Ctrl+Alt+[ jumps to Prompt 3, Prompt 2, Prompt 1
+    const prev1 = createFakeEvent('keydown', {
+      key: '[',
+      code: 'BracketLeft',
+      ctrlKey: true,
+      altKey: true,
+      target: env.input,
+    });
+    env.doc.dispatchEvent(prev1);
+    assert.equal(prev1.defaultPrevented, true);
+    assert.equal(prev1.propagationStopped, true);
+    assert.equal(env.scroller.scrollTop, 1384);
+    assert.equal(env.doc.activeElement, env.input);
+
+    const prev2 = createFakeEvent('keydown', {
+      key: '[',
+      code: 'BracketLeft',
+      ctrlKey: true,
+      altKey: true,
+      target: env.input,
+    });
+    env.doc.dispatchEvent(prev2);
+    assert.equal(prev2.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 684);
+
+    // Works when event.target is a Text node inside contenteditable and with non-US key via event.code
+    const textNode = { nodeType: 3, parentElement: env.input };
+    const prev3 = createFakeEvent('keydown', {
+      key: 'х',
+      code: 'BracketLeft',
+      ctrlKey: true,
+      altKey: true,
+      target: textNode,
+    });
+    env.doc.dispatchEvent(prev3);
+    assert.equal(prev3.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 84);
+
+    // Ctrl+Alt+] jumps forward to Prompt 2, then Prompt 3
+    const next1 = createFakeEvent('keydown', {
+      key: ']',
+      code: 'BracketRight',
+      ctrlKey: true,
+      altKey: true,
+      target: env.input,
+    });
+    env.doc.dispatchEvent(next1);
+    assert.equal(next1.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 684);
+    assert.equal(env.doc.activeElement, env.input);
+
+    const next2 = createFakeEvent('keydown', {
+      key: 'ъ',
+      code: 'BracketRight',
+      ctrlKey: true,
+      altKey: true,
+      target: env.input,
+    });
+    env.doc.dispatchEvent(next2);
+    assert.equal(next2.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 1384);
+
+    // At the last prompt, Ctrl+Alt+] prevents default and stays put
+    const nextAtEnd = createFakeEvent('keydown', {
+      key: ']',
+      code: 'BracketRight',
+      ctrlKey: true,
+      altKey: true,
+      target: env.input,
+    });
+    env.doc.dispatchEvent(nextAtEnd);
+    assert.equal(nextAtEnd.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 1384);
+
+    feature.destroy();
+  });
+
+  it('ignores Ctrl+Alt+[ and Ctrl+Alt+] outside prompt input, with extra modifiers, IME composition, or AltGraph', () => {
+    const env = createFakeGeminiEnv({ promptTops: [100, 700, 1400], initialScrollTop: 1600 });
+    const feature = createSkipToPreviousPromptFeature({ doc: env.doc, observe: false });
+    feature.init();
+
+    // Outside prompt input (e.g. body or Skip button)
+    const btn = env.doc.querySelector(SKIP_BUTTON_SELECTOR);
+    for (const el of [env.doc.body, btn, env.leadingBtn]) {
+      env.doc.activeElement = el;
+      const ev = createFakeEvent('keydown', {
+        key: '[',
+        code: 'BracketLeft',
+        ctrlKey: true,
+        altKey: true,
+        target: el,
+      });
+      env.doc.dispatchEvent(ev);
+      assert.equal(ev.defaultPrevented, false);
+    }
+
+    // Inside prompt input, but missing Ctrl or Alt, or with Shift/Meta/isComposing/AltGraph
+    env.doc.activeElement = env.input;
+    const ignoredEvents = [
+      { key: '[', code: 'BracketLeft', ctrlKey: true, altKey: false },
+      { key: '[', code: 'BracketLeft', ctrlKey: false, altKey: true },
+      { key: '[', code: 'BracketLeft', ctrlKey: true, altKey: true, shiftKey: true },
+      { key: '[', code: 'BracketLeft', ctrlKey: true, altKey: true, metaKey: true },
+      { key: '[', code: 'BracketLeft', ctrlKey: true, altKey: true, isComposing: true },
+      {
+        key: '[',
+        code: 'Digit8',
+        ctrlKey: true,
+        altKey: true,
+        getModifierState: (mod) => mod === 'AltGraph',
+      },
+    ];
+    for (const props of ignoredEvents) {
+      const ev = createFakeEvent('keydown', { target: env.input, ...props });
+      env.doc.dispatchEvent(ev);
+      assert.equal(ev.defaultPrevented, false);
+    }
+
+    assert.equal(env.scroller.scrollTop, 1600);
+    feature.destroy();
+  });
+
+  it('advances smoothly across prompts on rapid consecutive jumps while native smooth scroll is in flight', () => {
+    const env = createFakeGeminiEnv({ promptTops: [100, 700, 1400], initialScrollTop: 1600 });
+    // Simulate async native smooth scrolling where scrollTop only moves partway before next keypress
+    env.scroller.scrollTo = ({ top, behavior }) => {
+      env.scroller.scrollCalls.push({ method: 'scrollTo', top, behavior });
+      // Stay near previous position (in-flight)
+      env.scroller.scrollTop = Math.round((env.scroller.scrollTop + top) / 2);
+    };
+
+    const feature = createSkipToPreviousPromptFeature({ doc: env.doc, observe: false });
+    feature.init();
+
+    env.doc.activeElement = env.input;
+
+    // 1st Ctrl+Alt+[ targets 1384 (scrollTop moves partway to 1492)
+    env.doc.dispatchEvent(
+      createFakeEvent('keydown', { key: '[', code: 'BracketLeft', ctrlKey: true, altKey: true, target: env.input }),
+    );
+    assert.equal(env.scroller.scrollCalls[0].top, 1384);
+
+    // 2nd Ctrl+Alt+[ immediately targets 684 instead of repeating 1384
+    env.doc.dispatchEvent(
+      createFakeEvent('keydown', { key: '[', code: 'BracketLeft', ctrlKey: true, altKey: true, target: env.input }),
+    );
+    assert.equal(env.scroller.scrollCalls[1].top, 684);
+
+    // 3rd Ctrl+Alt+] reverses smoothly to target 1384
+    env.doc.dispatchEvent(
+      createFakeEvent('keydown', { key: ']', code: 'BracketRight', ctrlKey: true, altKey: true, target: env.input }),
+    );
+    assert.equal(env.scroller.scrollCalls[2].top, 1384);
+
+    feature.destroy();
+  });
 });

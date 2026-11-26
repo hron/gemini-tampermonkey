@@ -21,11 +21,13 @@ Scroll the Gemini conversation smoothly without leaving the prompt input:
 - Modifier combos like **`Shift+PageUp`** / **`Shift+PageDown`** (text selection) and **`Ctrl+PageUp`** / **`Ctrl+PageDown`** (tab switching), as well as dialogs, menus, sidebar scrolling, and inline edit fields, are left untouched.
 
 ### Skip to previous prompt & keyboard scrolling
-Replicates Google Search AI Mode's `"Skip to previous prompt"` workflow on Gemini:
+Replicates Google Search AI Mode's `"Skip to previous prompt"` workflow on Gemini, plus direct prompt-to-prompt jumping:
 
+- Press **`Ctrl+Alt+[`** / **`Ctrl+Alt+]`** while focused in the Gemini prompt input to smoothly jump to the previous / next user prompt without leaving the input field.
 - Press **`Shift+Tab`** while focused in the Gemini prompt input to reveal and select the **`↑ Skip to previous prompt`** button above the right side of the input box.
 - While `"Skip to previous prompt"` is focused:
   - **`ArrowUp`** / **`ArrowDown`**: scroll the chat output up/down.
+  - **`Shift+ArrowUp`** / **`Shift+ArrowDown`**: jump to the previous / next user prompt.
   - **`PageUp`** / **`PageDown`**: scroll the chat output up/down by a page.
   - **`Home`** / **`End`**: jump to the top / bottom of the conversation.
   - **`Enter`** / **`Space`** (or click): jump to the previous user prompt above the current scroll position.
