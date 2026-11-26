@@ -16,6 +16,7 @@ const SOURCE_FILES = [
   'src/features/skip-to-previous-prompt.js',
   'src/features/page-scroll.js',
   'src/features/search-dialog.js',
+  'src/features/citation-chips.js',
   'src/main.js',
 ];
 

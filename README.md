@@ -32,6 +32,9 @@ Replicates Google Search AI Mode's `"Skip to previous prompt"` workflow on Gemin
   - **`Tab`** or **`Escape`**: return focus directly to the prompt input field.
   - **`Shift+Tab`**: continue backwards to Gemini's `Upload & tools` button (no focus trap).
 
+### Vimium-friendly inline citation chips
+Gemini's inline source chips (e.g. `Google Antigravity`, `Google Antigravity · + 2`) are `<button>` elements whose sources popover opens on `focus` or `mouseenter` (not on `click`) and tears down on `mouseout`. When Vimium clicks a chip, it doesn't focus the button and records the chip as `lastHoveredElement` — so clicking a link inside the opened popover dispatches a synthetic `mouseout` on the chip first, closing the popover and detaching the link before `click` even fires. The script intercepts only synthetic hover/unhover, pointer, and click events on `<source-inline-chip>` buttons to open/switch popovers via `focus()` and keep them open while Vimium activates links inside the popover, while also styling `inline-source-card a[href]` as a clean block-level pointer target and leaving real mouse interactions untouched.
+
 ## Development
 
 Requirements: Node.js (zero external npm dependencies).

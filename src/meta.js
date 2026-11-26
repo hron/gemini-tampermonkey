@@ -10,7 +10,7 @@ export function createUserscriptHeader({ version }) {
 // @name         Gemini Keyboard Shortcuts
 // @namespace    ${REPO_URL}
 // @version      ${version}
-// @description  Adds missing keyboard shortcuts to gemini.google.com, including full keyboard navigation for the Ctrl+K search dialog, smooth PageUp/PageDown scrolling while the prompt input is focused, and Google AI Mode's "Skip to previous prompt".
+// @description  Adds missing keyboard shortcuts to gemini.google.com, including full keyboard navigation for the Ctrl+K search dialog, smooth PageUp/PageDown scrolling while the prompt input is focused, Google AI Mode's "Skip to previous prompt", and Vimium-friendly citation chips.
 // @author       Aleksei Gusev
 // @homepageURL  ${REPO_URL}
 // @supportURL   ${REPO_URL}/issues

@@ -28,6 +28,16 @@ export function toPageOptions(obj, doc = document) {
   return obj;
 }
 
+export function focusElement(el, doc = document) {
+  if (!el || typeof el.focus !== 'function') return false;
+  try {
+    el.focus(toPageOptions({ preventScroll: true }, doc));
+  } catch {
+    el.focus();
+  }
+  return true;
+}
+
 export function findPromptInput(doc = document) {
   return doc.querySelector(PROMPT_INPUT_SELECTOR);
 }

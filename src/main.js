@@ -1,3 +1,4 @@
+import { createCitationChipsFeature } from './features/citation-chips.js';
 import { createPageScrollFeature } from './features/page-scroll.js';
 import { createSearchDialogFeature } from './features/search-dialog.js';
 import { createSkipToPreviousPromptFeature } from './features/skip-to-previous-prompt.js';
@@ -7,6 +8,7 @@ export function bootstrapGeminiShortcuts(doc = document) {
     createSkipToPreviousPromptFeature({ doc, observe: true }),
     createPageScrollFeature({ doc }),
     createSearchDialogFeature({ doc, observe: true }),
+    createCitationChipsFeature({ doc }),
   ];
 
   for (const feature of features) {

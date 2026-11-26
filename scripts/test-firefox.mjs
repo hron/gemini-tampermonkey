@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
+import { createDevLoaderScript } from './dev-server.mjs';
+
 const ROOT_DIR = path.resolve(import.meta.dirname, '..');
 const HARNESS_PATH = path.join(ROOT_DIR, 'test/fixture/gemini-harness.html');
 const DIST_PATH = path.join(ROOT_DIR, 'dist/gemini-shortcuts.user.js');
@@ -72,7 +74,7 @@ const server = http.createServer((req, res) => {
     res.end(zeroStateHtml);
     return;
   }
-  if (urlPath === '/csp') {
+  if (urlPath === '/csp' || urlPath === '/csp-dev') {
     const stripped = harnessHtml
       .replace('<script src="/dist/gemini-shortcuts.user.js"></script>', '')
       .replace('<style>', '<style nonce="testnonce">')
@@ -117,8 +119,13 @@ fs.writeFileSync(
       permissions: ['<all_urls>'],
       content_scripts: [
         {
-          matches: ['http://127.0.0.1/csp*'],
+          matches: ['http://127.0.0.1/csp'],
           js: ['gm-shim.js', 'gemini-shortcuts.user.js'],
+          run_at: 'document_idle',
+        },
+        {
+          matches: ['http://127.0.0.1/csp-dev*'],
+          js: ['gm-dev-shim.js', 'dev-loader.user.js'],
           run_at: 'document_idle',
         },
       ],
@@ -136,7 +143,39 @@ fs.writeFileSync(
     return style;
   };`,
 );
+fs.writeFileSync(
+  path.join(extDir, 'gm-dev-shim.js'),
+  `window.Function = function() {
+    throw new EvalError('call to Function() blocked by CSP');
+  };
+  window.GM_addStyle = function(css) {
+    const style = document.createElement('style');
+    style.textContent = css;
+    (document.head || document.documentElement).appendChild(style);
+    return style;
+  };
+  window.GM_addElement = function(tagOrParent, tagOrAttrs, maybeAttrs) {
+    const isParent = typeof tagOrParent !== 'string';
+    const parent = isParent ? tagOrParent : (document.head || document.documentElement);
+    const tag = isParent ? tagOrAttrs : tagOrParent;
+    const attrs = (isParent ? maybeAttrs : tagOrAttrs) || {};
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'textContent') el.textContent = v;
+      else el.setAttribute(k, v);
+    }
+    parent.appendChild(el);
+    return el;
+  };
+  window.GM_xmlhttpRequest = function(opts) {
+    fetch(opts.url)
+      .then((r) => r.text().then((text) => ({ status: r.status, responseText: text, responseHeaders: '' })))
+      .then((res) => opts.onload && opts.onload(res))
+      .catch((err) => opts.onerror && opts.onerror(err));
+  };`,
+);
 fs.writeFileSync(path.join(extDir, 'gemini-shortcuts.user.js'), userscriptJs);
+fs.writeFileSync(path.join(extDir, 'dev-loader.user.js'), createDevLoaderScript({ port: httpPort }));
 
 const ff = spawn(
   'firefox',
@@ -547,6 +586,126 @@ async function verifyScenario(context, url, label) {
   await press('\uE00C', false, 150);
   assert.equal((await getSearchState()).dialogOpen, false, `${label}: Escape closes search dialog`);
 
+  // --- Vimium-Friendly Inline Citation Chips E2E ---
+  const getCitationState = () =>
+    evalJson(`(() => {
+      const chipZed = document.getElementById('chip-zed');
+      const chipAg = document.getElementById('chip-antigravity');
+      const dialog = document.querySelector('.cdk-overlay-pane [role="dialog"].hover-card-container');
+      const cards = dialog ? Array.from(dialog.querySelectorAll('inline-source-card a')) : [];
+      return {
+        zedExpanded: chipZed?.getAttribute('aria-expanded') || null,
+        agExpanded: chipAg?.getAttribute('aria-expanded') || null,
+        activeId: document.activeElement?.id || null,
+        dialogChipKey: dialog ? dialog.getAttribute('data-chip-key') : null,
+        cardCount: cards.length,
+        lastMarkdownLinkClick: window.__lastMarkdownLinkClick || null,
+      };
+    })()`);
+
+  // Mirror Vimium's DomUtils.simulateClick + DomUtils.simulateMouseEvent:
+  // on mouseover, Vimium first dispatches synthetic mouseout on lastHoveredElement!
+  const simulateVimiumClick = (selector) =>
+    evalJson(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return false;
+      const opts = { bubbles: true, cancelable: true, composed: true, view: window, detail: 1 };
+      el.dispatchEvent(new MouseEvent('pointerover', opts));
+      if (window.__vimiumLastHovered) {
+        window.__vimiumLastHovered.dispatchEvent(new MouseEvent('mouseout', opts));
+      }
+      window.__vimiumLastHovered = el;
+      el.dispatchEvent(new MouseEvent('mouseover', opts));
+      el.dispatchEvent(new MouseEvent('pointerdown', opts));
+      el.dispatchEvent(new MouseEvent('mousedown', opts));
+      el.dispatchEvent(new MouseEvent('pointerup', opts));
+      el.dispatchEvent(new MouseEvent('mouseup', opts));
+      el.dispatchEvent(new MouseEvent('click', opts));
+      return true;
+    })()`);
+
+  // Ensure no chip is focused initially
+  await evalJson(`(() => { document.activeElement?.blur?.(); return true; })()`);
+  const beforeCitation = await getCitationState();
+  assert.equal(beforeCitation.dialogChipKey, null, `${label}: no citation dialog open initially`);
+
+  // 1. Vimium synthetic click on inner span of collapsed chip opens its dialog via focus()
+  assert.equal(await simulateVimiumClick('#chip-zed .source-title'), true);
+  const afterZedClick = await getCitationState();
+  assert.equal(afterZedClick.activeId, 'chip-zed', `${label}: Vimium click focuses chip-zed`);
+  assert.equal(afterZedClick.zedExpanded, 'true', `${label}: chip-zed aria-expanded becomes true`);
+  assert.equal(afterZedClick.dialogChipKey, 'zed', `${label}: chip-zed sources dialog opens`);
+  assert.equal(afterZedClick.cardCount, 1, `${label}: chip-zed dialog renders 1 source card`);
+
+  // 2. Vimium synthetic click on a different chip switches directly to the second dialog in one click
+  assert.equal(await simulateVimiumClick('#chip-antigravity'), true);
+  const afterAgClick = await getCitationState();
+  assert.equal(afterAgClick.activeId, 'chip-antigravity', `${label}: Vimium click focuses chip-antigravity`);
+  assert.equal(afterAgClick.zedExpanded, 'false', `${label}: chip-zed collapses when switching`);
+  assert.equal(afterAgClick.agExpanded, 'true', `${label}: chip-antigravity expands`);
+  assert.equal(afterAgClick.dialogChipKey, 'antigravity', `${label}: chip-antigravity dialog opens`);
+  assert.equal(afterAgClick.cardCount, 3, `${label}: chip-antigravity dialog renders 3 source cards`);
+
+  // 3. Escape closes the dialog while keeping focus on chip-antigravity; clicking it again via Vimium re-opens it
+  await press('\uE00C', false, 150);
+  const afterChipEsc = await getCitationState();
+  assert.equal(afterChipEsc.dialogChipKey, null, `${label}: Escape closes citation dialog`);
+  assert.equal(afterChipEsc.activeId, 'chip-antigravity', `${label}: focus remains on chip-antigravity after Escape`);
+  assert.equal(afterChipEsc.agExpanded, 'false', `${label}: chip-antigravity collapsed after Escape`);
+
+  assert.equal(await simulateVimiumClick('#chip-antigravity'), true);
+  const afterReopen = await getCitationState();
+  assert.equal(afterReopen.activeId, 'chip-antigravity', `${label}: re-clicking focused collapsed chip keeps focus`);
+  assert.equal(afterReopen.agExpanded, 'true', `${label}: re-clicking focused collapsed chip re-opens dialog`);
+  assert.equal(afterReopen.dialogChipKey, 'antigravity', `${label}: chip-antigravity dialog re-opened after Escape`);
+
+  // 4. Opened popover <inline-source-card> moves cursor:pointer onto block-level <a> so Vimium hints <a> directly
+  const cardLayout = await evalJson(`(() => {
+    const card = document.querySelector('.cdk-overlay-pane inline-source-card');
+    const link = card ? card.querySelector('a[href]') : null;
+    const rects = link ? Array.from(link.getClientRects()).map((r) => ({ w: Math.round(r.width), h: Math.round(r.height) })) : [];
+    return {
+      cardCursor: card ? getComputedStyle(card).cursor : null,
+      linkDisplay: link ? getComputedStyle(link).display : null,
+      linkCursor: link ? getComputedStyle(link).cursor : null,
+      linkRects: rects,
+    };
+  })()`);
+  assert.equal(cardLayout.cardCursor, 'auto', `${label}: inline-source-card host must not steal cursor:pointer hint`);
+  assert.equal(cardLayout.linkDisplay, 'block', `${label}: inline-source-card a[href] must be display:block`);
+  assert.equal(cardLayout.linkCursor, 'pointer', `${label}: inline-source-card a[href] must have cursor:pointer`);
+  assert.equal(cardLayout.linkRects.length, 1, `${label}: block-level a[href] must produce a single clean client rect`);
+  assert.ok(cardLayout.linkRects[0].w > 100 && cardLayout.linkRects[0].h > 20, `${label}: a[href] rect must cover the card`);
+
+  // 5. Vimium synthetic click on popover link (<a> directly) AND fallback on <inline-source-card> host both activate the link
+  await evalJson(`(() => { window.__lastSourceCardHref = null; return true; })()`);
+  assert.equal(await simulateVimiumClick('.cdk-overlay-pane inline-source-card a[href]'), true);
+  assert.equal(
+    await evalJson(`window.__lastSourceCardHref`),
+    'https://antigravity.google/docs/ide/extensions/acp/',
+    `${label}: Vimium synthetic click on popover a[href] activates the source link`,
+  );
+
+  await evalJson(`(() => { window.__lastSourceCardHref = null; return true; })()`);
+  assert.equal(await simulateVimiumClick('.cdk-overlay-pane inline-source-card:nth-of-type(2)'), true);
+  assert.equal(
+    await evalJson(`window.__lastSourceCardHref`),
+    'https://discuss.ai.google.dev/t/acp-clarification/123',
+    `${label}: fallback synthetic click on <inline-source-card> host forwards to inner a[href]`,
+  );
+
+  // 6. Synthetic click on ordinary inline markdown link (<link-block><a>) is NOT intercepted
+  assert.equal(await simulateVimiumClick('#harness-markdown-link'), true);
+  const afterMdLink = await getCitationState();
+  assert.deepEqual(
+    afterMdLink.lastMarkdownLinkClick,
+    { href: 'https://doc.rust-lang.org/book/', isTrusted: false },
+    `${label}: synthetic click on ordinary markdown link must pass through untouched`,
+  );
+
+  // Close dialog cleanly
+  await press('\uE00C', false, 100);
+
   console.log(`PASS: ${label}`);
 }
 
@@ -624,6 +783,11 @@ try {
     context,
     `http://127.0.0.1:${httpPort}/csp`,
     'Firefox WebExtension Content Script + Strict CSP',
+  );
+  await verifyScenario(
+    context,
+    `http://127.0.0.1:${httpPort}/csp-dev`,
+    'Firefox Dev Loader + Strict CSP (Function() blocked)',
   );
   console.log('All Firefox E2E tests passed.');
 } finally {
