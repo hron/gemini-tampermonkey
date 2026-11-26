@@ -54,6 +54,15 @@ function createFakeElement(tag, { attrs = {}, classes = [], rect = { top: 0 }, s
       if (selector.includes('[contenteditable="true"]')) {
         return attrMap.get('contenteditable') === 'true';
       }
+      if (selector.includes('[role="dialog"]')) {
+        return (
+          attrMap.get('role') === 'dialog' ||
+          attrMap.get('role') === 'menu' ||
+          attrMap.get('role') === 'listbox' ||
+          attrMap.get('aria-modal') === 'true' ||
+          classSet.has('cdk-overlay-container')
+        );
+      }
       return false;
     },
     closest(selector) {
@@ -642,14 +651,104 @@ describe('skip-to-previous-prompt feature', () => {
     feature.destroy();
   });
 
-  it('ignores Ctrl+Alt+[ and Ctrl+Alt+] outside prompt input, with extra modifiers, IME composition, or AltGraph', () => {
+  it('scrolls between prompts on Ctrl+Alt+[ and Ctrl+Alt+] in any non-overlay context without moving focus', () => {
     const env = createFakeGeminiEnv({ promptTops: [100, 700, 1400], initialScrollTop: 1600 });
     const feature = createSkipToPreviousPromptFeature({ doc: env.doc, observe: false });
     feature.init();
 
-    // Outside prompt input (e.g. body or Skip button)
     const btn = env.doc.querySelector(SKIP_BUTTON_SELECTOR);
-    for (const el of [env.doc.body, btn, env.leadingBtn]) {
+    const otherTextarea = createFakeElement('textarea');
+    const chatMessage = createFakeElement('div');
+    const textNodeInMessage = { nodeType: 3, parentElement: chatMessage };
+
+    // Body focused: Ctrl+Alt+[ -> Prompt 3 (1384)
+    env.doc.activeElement = env.doc.body;
+    const bodyPrev = createFakeEvent('keydown', {
+      key: '[',
+      code: 'BracketLeft',
+      ctrlKey: true,
+      altKey: true,
+      target: env.doc.body,
+    });
+    env.doc.dispatchEvent(bodyPrev);
+    assert.equal(bodyPrev.defaultPrevented, true);
+    assert.equal(bodyPrev.propagationStopped, true);
+    assert.equal(env.scroller.scrollTop, 1384);
+    assert.equal(env.doc.activeElement, env.doc.body);
+
+    // Skip button focused: Ctrl+Alt+[ -> Prompt 2 (684)
+    env.doc.activeElement = btn;
+    const btnPrev = createFakeEvent('keydown', {
+      key: '[',
+      code: 'BracketLeft',
+      ctrlKey: true,
+      altKey: true,
+      target: btn,
+    });
+    env.doc.dispatchEvent(btnPrev);
+    assert.equal(btnPrev.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 684);
+    assert.equal(env.doc.activeElement, btn);
+
+    // Leading action button focused: Ctrl+Alt+[ -> Prompt 1 (84)
+    env.doc.activeElement = env.leadingBtn;
+    const leadingPrev = createFakeEvent('keydown', {
+      key: '[',
+      code: 'BracketLeft',
+      ctrlKey: true,
+      altKey: true,
+      target: env.leadingBtn,
+    });
+    env.doc.dispatchEvent(leadingPrev);
+    assert.equal(leadingPrev.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 84);
+    assert.equal(env.doc.activeElement, env.leadingBtn);
+
+    // Another textarea focused: Ctrl+Alt+] -> Prompt 2 (684)
+    env.doc.activeElement = otherTextarea;
+    const textareaNext = createFakeEvent('keydown', {
+      key: ']',
+      code: 'BracketRight',
+      ctrlKey: true,
+      altKey: true,
+      target: otherTextarea,
+    });
+    env.doc.dispatchEvent(textareaNext);
+    assert.equal(textareaNext.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 684);
+    assert.equal(env.doc.activeElement, otherTextarea);
+
+    // Text node inside chat message: Ctrl+Alt+] -> Prompt 3 (1384)
+    env.doc.activeElement = chatMessage;
+    const msgNext = createFakeEvent('keydown', {
+      key: ']',
+      code: 'BracketRight',
+      ctrlKey: true,
+      altKey: true,
+      target: textNodeInMessage,
+    });
+    env.doc.dispatchEvent(msgNext);
+    assert.equal(msgNext.defaultPrevented, true);
+    assert.equal(env.scroller.scrollTop, 1384);
+    assert.equal(env.doc.activeElement, chatMessage);
+
+    feature.destroy();
+  });
+
+  it('ignores Ctrl+Alt+[ and Ctrl+Alt+] inside overlays, with extra modifiers, IME composition, or AltGraph', () => {
+    const env = createFakeGeminiEnv({ promptTops: [100, 700, 1400], initialScrollTop: 1600 });
+    const feature = createSkipToPreviousPromptFeature({ doc: env.doc, observe: false });
+    feature.init();
+
+    // Inside dialog / menu / overlay
+    const dialog = createFakeElement('div', { attrs: { role: 'dialog', 'aria-modal': 'true' } });
+    const dialogInput = createFakeElement('input');
+    dialog.appendChild(dialogInput);
+    const overlayContainer = createFakeElement('div', { classes: ['cdk-overlay-container'] });
+    const menuItem = createFakeElement('button');
+    overlayContainer.appendChild(menuItem);
+
+    for (const el of [dialogInput, menuItem]) {
       env.doc.activeElement = el;
       const ev = createFakeEvent('keydown', {
         key: '[',
@@ -662,7 +761,7 @@ describe('skip-to-previous-prompt feature', () => {
       assert.equal(ev.defaultPrevented, false);
     }
 
-    // Inside prompt input, but missing Ctrl or Alt, or with Shift/Meta/isComposing/AltGraph
+    // Missing Ctrl or Alt, or with Shift/Meta/isComposing/AltGraph
     env.doc.activeElement = env.input;
     const ignoredEvents = [
       { key: '[', code: 'BracketLeft', ctrlKey: true, altKey: false },

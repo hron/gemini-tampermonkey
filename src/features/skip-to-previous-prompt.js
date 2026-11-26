@@ -447,7 +447,7 @@ export function createSkipToPreviousPromptFeature({ doc = document, observe = tr
       if (isNodeInsideOverlay(doc.activeElement) || isNodeInsideOverlay(event.target)) {
         return;
       }
-      if (!isPromptInputElement(doc.activeElement) && !isPromptInputElement(event.target)) {
+      if (!findChatScroller(doc)) {
         return;
       }
 

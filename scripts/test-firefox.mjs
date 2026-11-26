@@ -634,10 +634,40 @@ async function verifyScenario(context, url, label) {
     `${label}: Ctrl+Alt+] at last prompt stays at last prompt (${afterCtrlAltNext1.scrollTop} -> ${afterCtrlAltNextEnd.scrollTop})`,
   );
 
-  // Restore scroll to bottom for Skip button tests
+  // Ctrl+Alt+[ and Ctrl+Alt+] also work when focus is outside the prompt input (e.g. body)
   await evalJson(`(() => {
     const scroller = document.querySelector('infinite-scroller[data-test-id="chat-history-container"]');
     scroller.scrollTop = scroller.scrollHeight;
+    document.activeElement?.blur?.();
+    return true;
+  })()`);
+  const beforeBodyPromptNav = await getState();
+  assert.notEqual(beforeBodyPromptNav.activeAria, 'Enter a prompt for Gemini', `${label}: input blurred before body Ctrl+Alt+[`);
+  await pressCtrlAlt('[', 550);
+  const afterBodyCtrlAltPrev = await getState();
+  assert.notEqual(afterBodyCtrlAltPrev.activeAria, 'Enter a prompt for Gemini', `${label}: Ctrl+Alt+[ does not steal focus back to input`);
+  assert.ok(
+    afterBodyCtrlAltPrev.scrollTop < beforeBodyPromptNav.scrollTop - 200,
+    `${label}: Ctrl+Alt+[ works when body is focused (${beforeBodyPromptNav.scrollTop} -> ${afterBodyCtrlAltPrev.scrollTop})`,
+  );
+  await pressCtrlAlt('[', 550);
+  const afterBodyCtrlAltPrev2 = await getState();
+  assert.ok(
+    afterBodyCtrlAltPrev2.scrollTop < afterBodyCtrlAltPrev.scrollTop - 100,
+    `${label}: 2nd Ctrl+Alt+[ works when body is focused (${afterBodyCtrlAltPrev.scrollTop} -> ${afterBodyCtrlAltPrev2.scrollTop})`,
+  );
+  await pressCtrlAlt(']', 550);
+  const afterBodyCtrlAltNext = await getState();
+  assert.ok(
+    Math.abs(afterBodyCtrlAltNext.scrollTop - afterBodyCtrlAltPrev.scrollTop) <= 12,
+    `${label}: Ctrl+Alt+] works when body is focused (expected ~${afterBodyCtrlAltPrev.scrollTop}, got ${afterBodyCtrlAltNext.scrollTop})`,
+  );
+
+  // Restore focus to input and scroll to bottom for Skip button tests
+  await evalJson(`(() => {
+    const scroller = document.querySelector('infinite-scroller[data-test-id="chat-history-container"]');
+    scroller.scrollTop = scroller.scrollHeight;
+    document.querySelector('.ql-editor[contenteditable="true"]')?.focus();
     return true;
   })()`);
 

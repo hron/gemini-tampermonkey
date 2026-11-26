@@ -23,7 +23,7 @@ Scroll the Gemini conversation smoothly without leaving the prompt input:
 ### Skip to previous prompt & keyboard scrolling
 Replicates Google Search AI Mode's `"Skip to previous prompt"` workflow on Gemini, plus direct prompt-to-prompt jumping:
 
-- Press **`Ctrl+Alt+[`** / **`Ctrl+Alt+]`** while focused in the Gemini prompt input to smoothly jump to the previous / next user prompt without leaving the input field.
+- Press **`Ctrl+Alt+[`** / **`Ctrl+Alt+]`** anywhere in the chat (whether focused in the prompt input, reading the conversation, or on another control) to smoothly jump to the previous / next user prompt without moving focus.
 - Press **`Shift+Tab`** while focused in the Gemini prompt input to reveal and select the **`↑ Skip to previous prompt`** button above the right side of the input box.
 - While `"Skip to previous prompt"` is focused:
   - **`ArrowUp`** / **`ArrowDown`**: scroll the chat output up/down.
