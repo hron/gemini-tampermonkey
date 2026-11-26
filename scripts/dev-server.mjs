@@ -15,10 +15,11 @@ export function createDevLoaderScript({ port = PORT } = {}) {
   return `// ==UserScript==
 // @name         Gemini Keyboard Shortcuts (Local Dev)
 // @namespace    https://github.com/hron/gemini-tampermonkey#dev
-// @version      0.0.0-dev
+// @version      0.0.1-dev
 // @description  Live local dev loader for Gemini Keyboard Shortcuts (fetches a fresh build on every page load via GM_xmlhttpRequest, bypassing Tampermonkey @require caching).
 // @author       Aleksei Gusev
 // @match        https://gemini.google.com/*
+// @grant        GM_addElement
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @connect      127.0.0.1
@@ -37,6 +38,93 @@ export function createDevLoaderScript({ port = PORT } = {}) {
     return;
   }
 
+  function findPageScriptNonce() {
+    const scripts = document.querySelectorAll('script[nonce]');
+    for (const el of scripts) {
+      const nonce = el.nonce || el.getAttribute('nonce');
+      if (nonce) return nonce;
+    }
+    return '';
+  }
+
+  function buildBridgedBundle(source, styleEventName, ackEventName) {
+    return (
+      '(function () {\\n' +
+      '  document.dispatchEvent(new Event(' + JSON.stringify(ackEventName) + '));\\n' +
+      '  var GM_addStyle = function (css) {\\n' +
+      '    document.dispatchEvent(new CustomEvent(' + JSON.stringify(styleEventName) + ', { detail: css }));\\n' +
+      '  };\\n' +
+      source +
+      '\\n})();\\n//# sourceURL=' + DEV_URL
+    );
+  }
+
+  function executeBundle(source) {
+    const suffix = Math.random().toString(36).slice(2);
+    const styleEventName = 'gtm-dev-add-style-' + suffix;
+    const ackEventName = 'gtm-dev-exec-' + suffix;
+    let executed = false;
+
+    if (typeof GM_addStyle === 'function') {
+      document.addEventListener(styleEventName, (ev) => {
+        if (ev && typeof ev.detail === 'string') {
+          GM_addStyle(ev.detail);
+        }
+      });
+    }
+    document.addEventListener(
+      ackEventName,
+      () => {
+        executed = true;
+      },
+      { once: true },
+    );
+
+    const bridgedSource = buildBridgedBundle(source, styleEventName, ackEventName);
+    const nonce = findPageScriptNonce();
+    const errors = [];
+
+    // Strategy 1: GM_addElement('script', ...) with page CSP nonce (CSP + Trusted Types safe in Firefox/Chrome)
+    if (typeof GM_addElement === 'function') {
+      try {
+        const attrs = { textContent: bridgedSource };
+        if (nonce) attrs.nonce = nonce;
+        const el = GM_addElement('script', attrs);
+        if (el && typeof el.remove === 'function') el.remove();
+        if (executed) return 'GM_addElement';
+      } catch (err) {
+        errors.push(err);
+      }
+    }
+
+    // Strategy 2: Direct <script nonce="..."> DOM injection
+    try {
+      const s = document.createElement('script');
+      if (nonce) s.setAttribute('nonce', nonce);
+      s.textContent = bridgedSource;
+      (document.head || document.documentElement).appendChild(s);
+      s.remove();
+      if (executed) return 'script-nonce';
+    } catch (err) {
+      errors.push(err);
+    }
+
+    // Strategy 3: Fallback to sandbox Function() when CSP allows unsafe-eval
+    try {
+      const gmAddStyle = typeof GM_addStyle === 'function' ? GM_addStyle : undefined;
+      const pageCloneInto = typeof cloneInto === 'function' ? cloneInto : undefined;
+      new Function('GM_addStyle', 'cloneInto', source + '\\n//# sourceURL=' + DEV_URL)(
+        gmAddStyle,
+        pageCloneInto,
+      );
+      return 'Function';
+    } catch (err) {
+      errors.push(err);
+    }
+
+    throw errors[0] || new Error('Blocked by page Content Security Policy');
+  }
+
   GM_xmlhttpRequest({
     method: 'GET',
     url: DEV_URL + '?t=' + Date.now(),
@@ -47,14 +135,11 @@ export function createDevLoaderScript({ port = PORT } = {}) {
         return;
       }
       const buildHash = res.responseHeaders?.match(/^x-gtm-build-hash:\\s*(.+)$/im)?.[1]?.trim() || 'unknown';
-      const gmAddStyle = typeof GM_addStyle === 'function' ? GM_addStyle : undefined;
-      const pageCloneInto = typeof cloneInto === 'function' ? cloneInto : undefined;
       try {
-        new Function('GM_addStyle', 'cloneInto', res.responseText + '\\n//# sourceURL=' + DEV_URL)(
-          gmAddStyle,
-          pageCloneInto,
+        const mode = executeBundle(res.responseText);
+        console.info(
+          '[GTM Dev] Loaded fresh build (' + buildHash + ', ' + res.responseText.length + 'B via ' + mode + ') from ' + DEV_URL,
         );
-        console.info('[GTM Dev] Loaded fresh build (' + buildHash + ', ' + res.responseText.length + 'B) from ' + DEV_URL);
       } catch (err) {
         console.error('[GTM Dev] Failed to execute dev bundle:', err);
       }

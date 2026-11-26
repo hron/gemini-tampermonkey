@@ -65,16 +65,19 @@ describe('built userscript artifact', () => {
     assert.doesNotMatch(metaSource, /\(function\s*\(\)/);
   });
 
-  it('generates a valid live-reload Tampermonkey dev loader using GM_xmlhttpRequest', () => {
+  it('generates a valid live-reload Tampermonkey dev loader using GM_xmlhttpRequest and CSP-safe injection', () => {
     const loader = createDevLoaderScript({ port: 4173 });
     assert.match(loader, /\/\/ @name\s+Gemini Keyboard Shortcuts \(Local Dev\)$/m);
     assert.match(loader, /\/\/ @namespace\s+https:\/\/github\.com\/hron\/gemini-tampermonkey#dev$/m);
     assert.match(loader, /\/\/ @match\s+https:\/\/gemini\.google\.com\/\*$/m);
+    assert.match(loader, /\/\/ @grant\s+GM_addElement$/m);
     assert.match(loader, /\/\/ @grant\s+GM_addStyle$/m);
     assert.match(loader, /\/\/ @grant\s+GM_xmlhttpRequest$/m);
     assert.match(loader, /\/\/ @connect\s+127\.0\.0\.1$/m);
     assert.match(loader, /\/\/ @connect\s+localhost$/m);
     assert.doesNotMatch(loader, /\/\/ @require\s/m, 'must not use cached @require');
+    assert.match(loader, /GM_addElement/, 'must support CSP-safe GM_addElement script injection');
+    assert.match(loader, /script\[nonce\]/, 'must propagate page CSP nonce when injecting dev bundle');
     assert.doesNotThrow(() => new vm.Script(loader, { filename: 'dev-loader.user.js' }));
   });
 
