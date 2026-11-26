@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,12 +11,44 @@ import { createDevLoaderScript } from './dev-server.mjs';
 const ROOT_DIR = path.resolve(import.meta.dirname, '..');
 const HARNESS_PATH = path.join(ROOT_DIR, 'test/fixture/gemini-harness.html');
 const DIST_PATH = path.join(ROOT_DIR, 'dist/gemini-shortcuts.user.js');
+const DEFAULT_VIMIUM_XPI_PATH = path.join(ROOT_DIR, 'test/fixture/extensions/vimium_ff-2.4.2.xpi');
+const DEFAULT_VIMIUM_XPI_SHA256 =
+  '131e2a67580e7ae9125ab19781159e61409fac47b441fc2782aab76396ead196';
+
+function resolveVimiumExtensionData() {
+  const overridePath = process.env.VIMIUM_EXTENSION_PATH;
+  if (overridePath) {
+    const resolved = path.resolve(overridePath);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`VIMIUM_EXTENSION_PATH does not exist: ${resolved}`);
+    }
+    const stat = fs.statSync(resolved);
+    return stat.isDirectory()
+      ? { type: 'path', path: resolved }
+      : { type: 'archivePath', path: resolved };
+  }
+
+  if (!fs.existsSync(DEFAULT_VIMIUM_XPI_PATH)) {
+    throw new Error(`Bundled Vimium extension fixture not found: ${DEFAULT_VIMIUM_XPI_PATH}`);
+  }
+  const actualHash = crypto
+    .createHash('sha256')
+    .update(fs.readFileSync(DEFAULT_VIMIUM_XPI_PATH))
+    .digest('hex');
+  assert.equal(
+    actualHash,
+    DEFAULT_VIMIUM_XPI_SHA256,
+    `Bundled Vimium XPI SHA-256 mismatch for ${DEFAULT_VIMIUM_XPI_PATH}`,
+  );
+  return { type: 'archivePath', path: DEFAULT_VIMIUM_XPI_PATH };
+}
 
 if (!fs.existsSync(DIST_PATH)) {
   console.error('dist/gemini-shortcuts.user.js not found. Run `npm run build` first.');
   process.exit(1);
 }
 
+const vimiumExtensionData = resolveVimiumExtensionData();
 const harnessHtml = fs.readFileSync(HARNESS_PATH, 'utf8');
 const userscriptJs = fs.readFileSync(DIST_PATH, 'utf8');
 
@@ -24,6 +57,11 @@ const server = http.createServer((req, res) => {
   if (urlPath === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(harnessHtml);
+    return;
+  }
+  if (urlPath === '/no-userscript') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(harnessHtml.replace('<script src="/dist/gemini-shortcuts.user.js"></script>', ''));
     return;
   }
   if (urlPath === '/zero-state') {
@@ -234,10 +272,17 @@ function send(method, params = {}) {
   });
 }
 
-async function verifyScenario(context, url, label) {
-  await send('browsingContext.navigate', { context, url, wait: 'complete' });
-  await new Promise((r) => setTimeout(r, 350));
+async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 40, message = 'Condition timed out' } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await predicate();
+    if (result) return result;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error(message);
+}
 
+function createContextHelpers(context, label) {
   const evalJson = async (expr) => {
     const r = await send('script.evaluate', {
       expression: `JSON.stringify(${expr})`,
@@ -249,6 +294,168 @@ async function verifyScenario(context, url, label) {
     }
     return JSON.parse(r.result.value);
   };
+
+  const press = async (key, shift = false, waitMs = 200) => {
+    const actions = [];
+    if (shift) actions.push({ type: 'keyDown', value: '\uE008' });
+    actions.push({ type: 'keyDown', value: key });
+    actions.push({ type: 'keyUp', value: key });
+    if (shift) actions.push({ type: 'keyUp', value: '\uE008' });
+    await send('input.performActions', { context, actions: [{ type: 'key', id: 'kbd', actions }] });
+    await new Promise((r) => setTimeout(r, waitMs));
+  };
+
+  const clickViaVimium = async (selector, { openKey = 'f', expectSingleHint = false } = {}) => {
+    // Wait for any previous Vimium flash overlay (.vimium-flash, 400ms) to clear
+    // so it cannot occlude elementFromPoint during hint generation.
+    await waitFor(
+      () => evalJson(`!document.querySelector('.vimium-flash')`),
+      {
+        timeoutMs: 1500,
+        message: `${label}: Vimium flash overlay did not clear before pressing '${openKey}'`,
+      },
+    );
+
+    // Open Vimium link hints
+    await press(openKey, false, 60);
+    await waitFor(
+      () =>
+        evalJson(
+          `document.querySelectorAll('#vimium-hint-marker-container .vimiumHintMarker').length > 0`,
+        ),
+      {
+        timeoutMs: 2500,
+        message: `${label}: Vimium hint markers did not appear after pressing '${openKey}'`,
+      },
+    );
+
+    const hintLookup = await evalJson(`(() => {
+      const target = document.querySelector(${JSON.stringify(selector)});
+      if (!target) return { error: 'target not found' };
+      const clientRects = Array.from(target.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+      const tRect = clientRects[0] || target.getBoundingClientRect();
+      const fullRect = target.getBoundingClientRect();
+      const markers = Array.from(
+        document.querySelectorAll('#vimium-hint-marker-container .vimiumHintMarker'),
+      ).map((m) => {
+        const r = m.getBoundingClientRect();
+        return { text: m.textContent.trim(), left: r.left, top: r.top };
+      });
+      const near = markers
+        .map((m) => ({
+          ...m,
+          dist: Math.hypot(m.left - tRect.left, m.top - tRect.top),
+          insideTarget:
+            m.left >= fullRect.left - 8 &&
+            m.left <= fullRect.right + 4 &&
+            m.top >= fullRect.top - 8 &&
+            m.top <= fullRect.bottom + 4,
+        }))
+        .filter((m) => m.dist <= 20)
+        .sort((a, b) => a.dist - b.dist);
+      return {
+        targetRect: {
+          left: Math.round(tRect.left),
+          top: Math.round(tRect.top),
+          width: Math.round(fullRect.width),
+          height: Math.round(fullRect.height),
+        },
+        markerCount: markers.length,
+        near,
+        insideCount: markers.filter(
+          (m) =>
+            m.left >= fullRect.left - 6 &&
+            m.left <= fullRect.right + 2 &&
+            m.top >= fullRect.top - 6 &&
+            m.top <= fullRect.bottom + 2,
+        ).length,
+      };
+    })()`);
+
+    if (hintLookup.error || hintLookup.near.length === 0) {
+      await press('\uE00C', false, 100);
+      throw new Error(
+        `${label}: Vimium did not render a hint for ${selector}: ${JSON.stringify(hintLookup)}`,
+      );
+    }
+
+    if (expectSingleHint) {
+      assert.equal(
+        hintLookup.insideCount,
+        1,
+        `${label}: expected exactly 1 Vimium hint for ${selector}, got ${JSON.stringify(hintLookup)}`,
+      );
+    }
+
+    const hintKeys = hintLookup.near[0].text.toLowerCase();
+    for (const ch of hintKeys) {
+      await press(ch, false, 50);
+    }
+
+    await waitFor(
+      () => evalJson(`!document.getElementById('vimium-hint-marker-container')`),
+      {
+        timeoutMs: 2000,
+        message: `${label}: Vimium hint mode did not exit after typing '${hintKeys}' for ${selector}`,
+      },
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    return hintKeys;
+  };
+
+  return { evalJson, press, clickViaVimium };
+}
+
+async function verifyVimiumWithoutUserscript(context, url, label) {
+  await send('browsingContext.navigate', { context, url, wait: 'complete' });
+  await new Promise((r) => setTimeout(r, 500));
+
+  const { evalJson, clickViaVimium } = createContextHelpers(context, label);
+  await evalJson(`(() => { document.activeElement?.blur?.(); return true; })()`);
+
+  // Without the userscript, real Vimium clicking a citation chip does NOT open its popover
+  await clickViaVimium('#chip-zed');
+  const afterChip = await evalJson(`(() => ({
+    zedExpanded: document.getElementById('chip-zed')?.getAttribute('aria-expanded') || null,
+    dialogExists: Boolean(document.querySelector('.cdk-overlay-pane [role="dialog"].hover-card-container')),
+  }))()`);
+  assert.equal(afterChip.zedExpanded, 'false', `${label}: without userscript, Vimium click must not expand chip`);
+  assert.equal(afterChip.dialogExists, false, `${label}: without userscript, Vimium click must not open popover`);
+
+  // Even if #chip-zed is hovered open afterward, Vimium still remembers #chip-zed
+  // as its lastHoveredElement from the click above. Clicking the source link via
+  // Vimium dispatches a synthetic mouseout on #chip-zed first, tearing down the
+  // popover before click fires!
+  await evalJson(`(() => {
+    window.__lastSourceCardHref = null;
+    document.getElementById('chip-zed').dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+    return Boolean(document.querySelector('.cdk-overlay-pane inline-source-card'));
+  })()`);
+  await new Promise((r) => setTimeout(r, 150));
+  await clickViaVimium('.cdk-overlay-pane inline-source-card a[href]');
+  const afterLayer2WithoutFix = await evalJson(`(() => ({
+    href: window.__lastSourceCardHref,
+    dialogExists: Boolean(document.querySelector('.cdk-overlay-pane [role="dialog"].hover-card-container')),
+  }))()`);
+  assert.equal(
+    afterLayer2WithoutFix.dialogExists,
+    false,
+    `${label}: without userscript, Vimium lastHoveredElement mouseout closes the popover`,
+  );
+  assert.equal(
+    afterLayer2WithoutFix.href,
+    null,
+    `${label}: without userscript, Vimium popover link click fails because popover was torn down`,
+  );
+
+  console.log(`PASS: ${label}`);
+}
+
+async function verifyScenario(context, url, label) {
+  await send('browsingContext.navigate', { context, url, wait: 'complete' });
+  await new Promise((r) => setTimeout(r, 500));
+
+  const { evalJson, press, clickViaVimium } = createContextHelpers(context, label);
 
   const getState = () =>
     evalJson(`(() => {
@@ -265,16 +472,6 @@ async function verifyScenario(context, url, label) {
         btnPointerEvents: btn ? getComputedStyle(btn).pointerEvents : null,
       };
     })()`);
-
-  const press = async (key, shift = false, waitMs = 200) => {
-    const actions = [];
-    if (shift) actions.push({ type: 'keyDown', value: '\uE008' });
-    actions.push({ type: 'keyDown', value: key });
-    actions.push({ type: 'keyUp', value: key });
-    if (shift) actions.push({ type: 'keyUp', value: '\uE008' });
-    await send('input.performActions', { context, actions: [{ type: 'key', id: 'kbd', actions }] });
-    await new Promise((r) => setTimeout(r, waitMs));
-  };
 
   const pressCtrlAlt = async (key, waitMs = 500) => {
     await send('input.performActions', {
@@ -296,7 +493,6 @@ async function verifyScenario(context, url, label) {
     });
     await new Promise((r) => setTimeout(r, waitMs));
   };
-
   const initial = await getState();
   assert.equal(initial.btnExists, true, `${label}: button must be mounted`);
   assert.equal(initial.btnOpacity, '0', `${label}: button must start hidden`);
@@ -670,13 +866,18 @@ async function verifyScenario(context, url, label) {
   assert.equal(afterSearchEnter.dialogOpen, false, `${label}: Enter activates option and closes dialog`);
   assert.equal(afterSearchEnter.lastOpenedChatHref, '/app/chat-3', `${label}: Enter opened the highlighted chat`);
 
-  // Re-open with Ctrl+K and close with Escape
+  // Re-open with Ctrl+K and close with Escape.
+  // With Vimium installed and focus in the search <input>, the 1st Escape exits
+  // Vimium Insert mode (blurring the input) and the 2nd Escape closes the dialog.
   await pressCtrl('k', 150);
   assert.equal((await getSearchState()).dialogOpen, true, `${label}: Ctrl+K re-opens search dialog`);
   await press('\uE00C', false, 150);
+  if ((await getSearchState()).dialogOpen) {
+    await press('\uE00C', false, 150);
+  }
   assert.equal((await getSearchState()).dialogOpen, false, `${label}: Escape closes search dialog`);
 
-  // --- Vimium-Friendly Inline Citation Chips E2E ---
+  // --- Real Vimium Extension Inline Citation Chips E2E ---
   const getCitationState = () =>
     evalJson(`(() => {
       const chipZed = document.getElementById('chip-zed');
@@ -689,48 +890,35 @@ async function verifyScenario(context, url, label) {
         activeId: document.activeElement?.id || null,
         dialogChipKey: dialog ? dialog.getAttribute('data-chip-key') : null,
         cardCount: cards.length,
+        lastSourceCardHref: window.__lastSourceCardHref || null,
         lastMarkdownLinkClick: window.__lastMarkdownLinkClick || null,
       };
     })()`);
 
-  // Mirror Vimium's DomUtils.simulateClick + DomUtils.simulateMouseEvent:
-  // on mouseover, Vimium first dispatches synthetic mouseout on lastHoveredElement!
-  const simulateVimiumClick = (selector) =>
-    evalJson(`(() => {
-      const el = document.querySelector(${JSON.stringify(selector)});
-      if (!el) return false;
-      const opts = { bubbles: true, cancelable: true, composed: true, view: window, detail: 1 };
-      el.dispatchEvent(new MouseEvent('pointerover', opts));
-      if (window.__vimiumLastHovered) {
-        window.__vimiumLastHovered.dispatchEvent(new MouseEvent('mouseout', opts));
-      }
-      window.__vimiumLastHovered = el;
-      el.dispatchEvent(new MouseEvent('mouseover', opts));
-      el.dispatchEvent(new MouseEvent('pointerdown', opts));
-      el.dispatchEvent(new MouseEvent('mousedown', opts));
-      el.dispatchEvent(new MouseEvent('pointerup', opts));
-      el.dispatchEvent(new MouseEvent('mouseup', opts));
-      el.dispatchEvent(new MouseEvent('click', opts));
-      return true;
-    })()`);
-
-  // Ensure no chip is focused initially
-  await evalJson(`(() => { document.activeElement?.blur?.(); return true; })()`);
+  // Scroll the citation chips back into the viewport (previous Skip-to-Prompt tests scrolled to top)
+  // and blur activeElement so Vimium is in Normal mode.
+  await evalJson(`(() => {
+    const scroller = document.querySelector('infinite-scroller[data-test-id="chat-history-container"]');
+    scroller.scrollTop = scroller.scrollHeight;
+    document.activeElement?.blur?.();
+    return true;
+  })()`);
+  await new Promise((r) => setTimeout(r, 100));
   const beforeCitation = await getCitationState();
   assert.equal(beforeCitation.dialogChipKey, null, `${label}: no citation dialog open initially`);
 
-  // 1. Vimium synthetic click on inner span of collapsed chip opens its dialog via focus()
-  assert.equal(await simulateVimiumClick('#chip-zed .source-title'), true);
+  // 1. Real Vimium link-hint click ('f') on collapsed chip opens its dialog via focus()
+  await clickViaVimium('#chip-zed');
   const afterZedClick = await getCitationState();
-  assert.equal(afterZedClick.activeId, 'chip-zed', `${label}: Vimium click focuses chip-zed`);
+  assert.equal(afterZedClick.activeId, 'chip-zed', `${label}: Vimium hint click focuses chip-zed`);
   assert.equal(afterZedClick.zedExpanded, 'true', `${label}: chip-zed aria-expanded becomes true`);
   assert.equal(afterZedClick.dialogChipKey, 'zed', `${label}: chip-zed sources dialog opens`);
   assert.equal(afterZedClick.cardCount, 1, `${label}: chip-zed dialog renders 1 source card`);
 
-  // 2. Vimium synthetic click on a different chip switches directly to the second dialog in one click
-  assert.equal(await simulateVimiumClick('#chip-antigravity'), true);
+  // 2. Real Vimium link-hint click on a different chip switches directly to the second dialog in one click
+  await clickViaVimium('#chip-antigravity');
   const afterAgClick = await getCitationState();
-  assert.equal(afterAgClick.activeId, 'chip-antigravity', `${label}: Vimium click focuses chip-antigravity`);
+  assert.equal(afterAgClick.activeId, 'chip-antigravity', `${label}: Vimium hint click focuses chip-antigravity`);
   assert.equal(afterAgClick.zedExpanded, 'false', `${label}: chip-zed collapses when switching`);
   assert.equal(afterAgClick.agExpanded, 'true', `${label}: chip-antigravity expands`);
   assert.equal(afterAgClick.dialogChipKey, 'antigravity', `${label}: chip-antigravity dialog opens`);
@@ -743,7 +931,7 @@ async function verifyScenario(context, url, label) {
   assert.equal(afterChipEsc.activeId, 'chip-antigravity', `${label}: focus remains on chip-antigravity after Escape`);
   assert.equal(afterChipEsc.agExpanded, 'false', `${label}: chip-antigravity collapsed after Escape`);
 
-  assert.equal(await simulateVimiumClick('#chip-antigravity'), true);
+  await clickViaVimium('#chip-antigravity');
   const afterReopen = await getCitationState();
   assert.equal(afterReopen.activeId, 'chip-antigravity', `${label}: re-clicking focused collapsed chip keeps focus`);
   assert.equal(afterReopen.agExpanded, 'true', `${label}: re-clicking focused collapsed chip re-opens dialog`);
@@ -767,34 +955,54 @@ async function verifyScenario(context, url, label) {
   assert.equal(cardLayout.linkRects.length, 1, `${label}: block-level a[href] must produce a single clean client rect`);
   assert.ok(cardLayout.linkRects[0].w > 100 && cardLayout.linkRects[0].h > 20, `${label}: a[href] rect must cover the card`);
 
-  // 5. Vimium synthetic click on popover link (<a> directly) AND fallback on <inline-source-card> host both activate the link
+  // 5. Real Vimium link-hint clicks on popover source cards (single clean hint per card,
+  //    suppressing Vimium's real lastHoveredElement mouseout on chip-antigravity)
   await evalJson(`(() => { window.__lastSourceCardHref = null; return true; })()`);
-  assert.equal(await simulateVimiumClick('.cdk-overlay-pane inline-source-card a[href]'), true);
+  await clickViaVimium('.cdk-overlay-pane inline-source-card:nth-of-type(1) a[href]', {
+    expectSingleHint: true,
+  });
   assert.equal(
     await evalJson(`window.__lastSourceCardHref`),
     'https://antigravity.google/docs/ide/extensions/acp/',
-    `${label}: Vimium synthetic click on popover a[href] activates the source link`,
+    `${label}: Vimium hint click on 1st popover source link activates it`,
   );
 
   await evalJson(`(() => { window.__lastSourceCardHref = null; return true; })()`);
-  assert.equal(await simulateVimiumClick('.cdk-overlay-pane inline-source-card:nth-of-type(2)'), true);
+  await clickViaVimium('.cdk-overlay-pane inline-source-card:nth-of-type(2) a[href]', {
+    expectSingleHint: true,
+  });
   assert.equal(
     await evalJson(`window.__lastSourceCardHref`),
     'https://discuss.ai.google.dev/t/acp-clarification/123',
+    `${label}: Vimium hint click on 2nd popover source link activates it`,
+  );
+
+  // Fallback: synthetic click directly on <inline-source-card> host still forwards to inner a[href]
+  await evalJson(`(() => {
+    window.__lastSourceCardHref = null;
+    const card = document.querySelector('.cdk-overlay-pane inline-source-card:nth-of-type(3)');
+    card.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window }));
+    return true;
+  })()`);
+  assert.equal(
+    await evalJson(`window.__lastSourceCardHref`),
+    'https://layer3labs.io/antigravity-guide',
     `${label}: fallback synthetic click on <inline-source-card> host forwards to inner a[href]`,
   );
 
-  // 6. Synthetic click on ordinary inline markdown link (<link-block><a>) is NOT intercepted
-  assert.equal(await simulateVimiumClick('#harness-markdown-link'), true);
+  // 6. Real Vimium link-hint click on ordinary inline markdown link (<link-block><a>) is NOT intercepted
+  await clickViaVimium('#harness-markdown-link');
   const afterMdLink = await getCitationState();
   assert.deepEqual(
     afterMdLink.lastMarkdownLinkClick,
     { href: 'https://doc.rust-lang.org/book/', isTrusted: false },
-    `${label}: synthetic click on ordinary markdown link must pass through untouched`,
+    `${label}: Vimium hint click on ordinary markdown link must pass through untouched`,
   );
 
-  // Close dialog cleanly
-  await press('\uE00C', false, 100);
+  // Close dialog cleanly if still open
+  if (afterMdLink.dialogChipKey) {
+    await press('\uE00C', false, 100);
+  }
 
   console.log(`PASS: ${label}`);
 }
@@ -858,10 +1066,20 @@ async function verifyZeroStateLayout(context, url, label) {
 
 try {
   await send('session.new', { capabilities: {} });
+  const installedVimium = await send('webExtension.install', {
+    extensionData: vimiumExtensionData,
+  });
+  console.log(`Installed Vimium extension: ${installedVimium.extension} (${vimiumExtensionData.path})`);
+
   const tree = await send('browsingContext.getTree');
   const context = tree.contexts[0].context;
 
-  await verifyScenario(context, `http://127.0.0.1:${httpPort}/`, 'Firefox Direct Page');
+  await verifyVimiumWithoutUserscript(
+    context,
+    `http://127.0.0.1:${httpPort}/no-userscript`,
+    'Firefox + Vimium Baseline (without userscript, confirms reproduction)',
+  );
+  await verifyScenario(context, `http://127.0.0.1:${httpPort}/`, 'Firefox Direct Page + Vimium');
   await verifyZeroStateLayout(
     context,
     `http://127.0.0.1:${httpPort}/zero-state`,
@@ -872,12 +1090,12 @@ try {
   await verifyScenario(
     context,
     `http://127.0.0.1:${httpPort}/csp`,
-    'Firefox WebExtension Content Script + Strict CSP',
+    'Firefox WebExtension Content Script + Strict CSP + Vimium',
   );
   await verifyScenario(
     context,
     `http://127.0.0.1:${httpPort}/csp-dev`,
-    'Firefox Dev Loader + Strict CSP (Function() blocked)',
+    'Firefox Dev Loader + Strict CSP (Function() blocked) + Vimium',
   );
   console.log('All Firefox E2E tests passed.');
 } finally {

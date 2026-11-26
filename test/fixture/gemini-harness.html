@@ -580,7 +580,7 @@
 
       const pane = document.createElement('div');
       pane.className = 'cdk-overlay-pane';
-      pane.style.top = `${Math.max(16, Math.min(window.innerHeight - 220, Math.round(rect.bottom + 8)))}px`;
+      pane.style.top = `${Math.round(rect.bottom + 8)}px`;
       pane.style.left = `${Math.max(16, Math.min(window.innerWidth - 380, Math.round(rect.left)))}px`;
 
       const dialog = document.createElement('div');
@@ -604,6 +604,8 @@
         a.setAttribute('href', src.href);
         a.addEventListener('click', (ev) => {
           ev.preventDefault();
+          // Mirror real browser link activation: a detached <a> cannot navigate.
+          if (!a.isConnected) return;
           window.__lastSourceCardHref = src.href;
         });
 
@@ -637,6 +639,12 @@
         } catch {
           // Ignore if popover API is unavailable or already open
         }
+      }
+      // Mirror Angular CDK connected overlay: flip cleanly above the chip row
+      // when there is not enough room below so sibling chips stay unobstructed.
+      const paneRect = pane.getBoundingClientRect();
+      if (rect.bottom + 8 + paneRect.height > window.innerHeight - 16) {
+        pane.style.top = `${Math.max(16, Math.round(rect.top - paneRect.height - 8))}px`;
       }
       openOverlayPane = popover;
     }

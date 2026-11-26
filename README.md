@@ -51,8 +51,11 @@ npm test
 # Build and test together
 npm run check
 
-# Run automated real-Firefox E2E tests (WebDriver BiDi + WebExtension CSP sandbox)
+# Run automated real-Firefox E2E tests (WebDriver BiDi + WebExtension CSP sandbox + bundled Vimium extension)
 npm run test:firefox
+
+# Optional: run Firefox E2E against a custom Vimium .xpi or unpacked extension directory
+VIMIUM_EXTENSION_PATH=/path/to/vimium.xpi npm run test:firefox
 
 # Run local interactive Gemini DOM verification harness (http://127.0.0.1:4173/)
 npm run dev
