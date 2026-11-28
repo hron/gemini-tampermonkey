@@ -4,6 +4,12 @@ A modular Tampermonkey userscript that adds missing keyboard navigation and shor
 
 ## Features
 
+### Toggle sidebar with `Ctrl+B`
+Collapse or expand Gemini's left navigation sidebar from anywhere in the chat:
+
+- Press **`Ctrl+B`** (including while typing in the prompt input or on non-Latin keyboard layouts) to toggle the sidebar without stealing focus.
+- Overlays and modal dialogs (such as the `Ctrl+K` Search Chats dialog), extra modifier combos like **`Ctrl+Shift+B`**, and held key repeat are handled cleanly so the sidebar won't flap or trigger behind modals.
+
 ### Keyboard navigation for the `Ctrl+K` Search Chats dialog
 Turns Gemini's `Ctrl+K` (`Search chats`) dialog into a keyboard-first command palette without stealing focus from the search input:
 

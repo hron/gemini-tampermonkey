@@ -896,16 +896,69 @@ async function verifyScenario(context, url, label) {
   assert.equal(afterSearchEnter.dialogOpen, false, `${label}: Enter activates option and closes dialog`);
   assert.equal(afterSearchEnter.lastOpenedChatHref, '/app/chat-3', `${label}: Enter opened the highlighted chat`);
 
-  // Re-open with Ctrl+K and close with Escape.
+  // Re-open with Ctrl+K, verify Ctrl+B is ignored inside modal dialog, and close with Escape.
   // With Vimium installed and focus in the search <input>, the 1st Escape exits
   // Vimium Insert mode (blurring the input) and the 2nd Escape closes the dialog.
   await pressCtrl('k', 150);
   assert.equal((await getSearchState()).dialogOpen, true, `${label}: Ctrl+K re-opens search dialog`);
+  await pressCtrl('b', 150);
+  const sidebarWhileDialogOpen = await evalJson(`({
+    expanded: document.getElementById('sidebar-toggle')?.getAttribute('aria-expanded') || null,
+    toggleCount: window.__sidebarToggleCount || 0,
+  })`);
+  assert.equal(sidebarWhileDialogOpen.expanded, 'true', `${label}: Ctrl+B inside search dialog must not toggle sidebar`);
+  assert.equal(sidebarWhileDialogOpen.toggleCount, 0, `${label}: Ctrl+B inside search dialog must not click toggle button`);
   await press('\uE00C', false, 150);
   if ((await getSearchState()).dialogOpen) {
     await press('\uE00C', false, 150);
   }
   assert.equal((await getSearchState()).dialogOpen, false, `${label}: Escape closes search dialog`);
+
+  // --- Ctrl+B Sidebar Toggle E2E ---
+  const getSidebarState = () =>
+    evalJson(`(() => {
+      const sidenav = document.getElementById('harness-sidenav');
+      const btn = document.getElementById('sidebar-toggle');
+      return {
+        testId: btn ? btn.getAttribute('data-test-id') : null,
+        expanded: btn ? btn.getAttribute('aria-expanded') : null,
+        isOpenClass: Boolean(sidenav?.classList.contains('side-nav-open')),
+        isCollapsedClass: Boolean(sidenav?.classList.contains('side-nav-collapsed')),
+        toggleCount: window.__sidebarToggleCount || 0,
+        activeAria: document.activeElement?.getAttribute?.('aria-label') || null,
+      };
+    })()`);
+
+  // Focus prompt input and toggle sidebar closed and open without stealing focus
+  await evalJson(`(() => {
+    document.querySelector('.ql-editor[contenteditable="true"]')?.focus();
+    return true;
+  })()`);
+  await pressCtrl('b', 150);
+  const afterCtrlBClose = await getSidebarState();
+  assert.equal(afterCtrlBClose.testId, 'side-nav-open-button', `${label}: collapsed sidebar swaps to side-nav-open-button`);
+  assert.equal(afterCtrlBClose.expanded, 'false', `${label}: Ctrl+B collapses sidebar`);
+  assert.equal(afterCtrlBClose.isCollapsedClass, true, `${label}: sidebar receives collapsed class`);
+  assert.equal(afterCtrlBClose.toggleCount, 1, `${label}: sidebar toggle clicked once`);
+  assert.equal(afterCtrlBClose.activeAria, 'Enter a prompt for Gemini', `${label}: Ctrl+B keeps focus in prompt input`);
+
+  await pressCtrl('b', 150);
+  const afterCtrlBOpen = await getSidebarState();
+  assert.equal(afterCtrlBOpen.testId, 'side-nav-close-button', `${label}: expanded sidebar swaps back to side-nav-close-button`);
+  assert.equal(afterCtrlBOpen.expanded, 'true', `${label}: second Ctrl+B expands sidebar`);
+  assert.equal(afterCtrlBOpen.isOpenClass, true, `${label}: sidebar receives open class`);
+  assert.equal(afterCtrlBOpen.toggleCount, 2, `${label}: sidebar toggle clicked twice`);
+  assert.equal(afterCtrlBOpen.activeAria, 'Enter a prompt for Gemini', `${label}: second Ctrl+B keeps focus in prompt input`);
+
+  // Also works when focus is outside the prompt input (e.g. body)
+  await evalJson(`(() => { document.activeElement?.blur?.(); return true; })()`);
+  await pressCtrl('b', 150);
+  const afterBodyCtrlB = await getSidebarState();
+  assert.equal(afterBodyCtrlB.expanded, 'false', `${label}: Ctrl+B toggles sidebar when body is focused`);
+  assert.equal(afterBodyCtrlB.toggleCount, 3, `${label}: sidebar toggle clicked 3rd time`);
+  assert.notEqual(afterBodyCtrlB.activeAria, 'Enter a prompt for Gemini', `${label}: Ctrl+B does not steal focus to input`);
+  await pressCtrl('b', 150);
+  assert.equal((await getSidebarState()).expanded, 'true', `${label}: Ctrl+B restores sidebar open`);
 
   // --- Real Vimium Extension Inline Citation Chips E2E ---
   const getCitationState = () =>

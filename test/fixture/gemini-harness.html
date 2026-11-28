@@ -69,10 +69,64 @@
       width: 100vw;
     }
 
+    .mobile-controls {
+      display: none;
+    }
+
+    bard-sidenav {
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      width: 240px;
+      padding: 12px;
+      gap: 12px;
+      background: var(--lumi-sys-color--surface-bright);
+      border-right: 1px solid var(--gem-sys-color--outline-low);
+      transition: width 120ms ease;
+    }
+
+    bard-sidenav.side-nav-collapsed {
+      width: 60px;
+    }
+
+    bard-sidenav.side-nav-collapsed .sidenav-list {
+      display: none;
+    }
+
+    bard-sidenav.side-nav-collapsed button.side-nav-toggle-btn {
+      color: #0000;
+    }
+
+    bard-sidenav.side-nav-collapsed button.side-nav-toggle-btn:hover,
+    bard-sidenav.side-nav-collapsed button.side-nav-toggle-btn:focus-visible {
+      color: var(--gem-sys-color--on-surface);
+    }
+
+    button.side-nav-menu-button,
+    button.side-nav-toggle-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 9999px;
+      border: 1px solid var(--gem-sys-color--outline-low);
+      background: transparent;
+      color: var(--gem-sys-color--on-surface);
+      cursor: pointer;
+      font-size: 16px;
+    }
+
+    .sidenav-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--gem-sys-color--on-surface-variant);
+    }
+
     chat-window {
       display: flex;
       flex-direction: column;
       flex: 1;
+      min-width: 0;
       height: 100%;
       overflow: hidden;
       padding-top: 48px;
@@ -412,12 +466,32 @@
     <span>active: <strong id="hud-active">none</strong></span>
     <span>scrollTop: <strong id="hud-scroll">0</strong>/<span id="hud-max">0</span></span>
     <span>skipOpacity: <strong id="hud-opacity">n/a</strong></span>
+    <span>sidebar: <strong id="hud-sidebar">open</strong></span>
     <span>lastKey: <strong id="hud-key">none</strong></span>
     <button type="button" id="open-search" tabindex="-1">Search (Ctrl+K)</button>
     <button type="button" id="toggle-theme" tabindex="-1">Toggle Theme</button>
   </div>
 
   <chat-app>
+    <!-- Hidden mobile duplicate button mirroring live Gemini responsive DOM -->
+    <div class="mobile-controls">
+      <button type="button" id="mobile-sidebar-toggle" data-test-id="side-nav-menu-button" class="side-nav-menu-button" aria-label="Main menu">☰</button>
+    </div>
+    <bard-sidenav id="harness-sidenav" class="side-nav-open" data-lcp-region="sidenav" data-test-id="side-nav">
+      <button
+        type="button"
+        id="sidebar-toggle"
+        data-test-id="side-nav-close-button"
+        class="side-nav-toggle-btn"
+        aria-label="Close sidebar"
+        aria-expanded="true"
+      >☰</button>
+      <div class="sidenav-list">
+        <div>Recent chats</div>
+        <div>Orbital mechanics overview</div>
+        <div>Rust async runtime comparison</div>
+      </div>
+    </bard-sidenav>
     <chat-window>
       <div class="chat-history-scroll-container lm">
         <infinite-scroller class="chat-history" data-test-id="chat-history-container">
@@ -736,7 +810,21 @@
     const hudScroll = document.getElementById('hud-scroll');
     const hudMax = document.getElementById('hud-max');
     const hudOpacity = document.getElementById('hud-opacity');
+    const hudSidebar = document.getElementById('hud-sidebar');
     const hudKey = document.getElementById('hud-key');
+
+    const sidenavEl = document.getElementById('harness-sidenav');
+    const sidebarToggleBtn = document.getElementById('sidebar-toggle');
+    window.__sidebarToggleCount = 0;
+    sidebarToggleBtn.addEventListener('click', () => {
+      const isOpen = sidenavEl.classList.toggle('side-nav-open');
+      sidenavEl.classList.toggle('side-nav-collapsed', !isOpen);
+      sidebarToggleBtn.setAttribute('data-test-id', isOpen ? 'side-nav-close-button' : 'side-nav-open-button');
+      sidebarToggleBtn.setAttribute('aria-label', isOpen ? 'Close sidebar' : 'Open sidebar');
+      sidebarToggleBtn.setAttribute('aria-expanded', String(isOpen));
+      window.__sidebarToggleCount += 1;
+      hudSidebar.textContent = isOpen ? 'open' : 'collapsed';
+    });
 
     function describeElement(el) {
       if (!el || el === document.body) return 'body';
